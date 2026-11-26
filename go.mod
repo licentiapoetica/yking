@@ -1,4 +1,4 @@
-module yking
+module github.com/licentiapoetica/yking
 
 go 1.27.4
 

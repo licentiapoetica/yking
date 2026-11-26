@@ -6,7 +6,7 @@ import (
 	"context"
 	"strconv"
 
-	"yking/internal/runner"
+	"github.com/licentiapoetica/yking/internal/runner"
 )
 
 // Binary is the ykman executable name.

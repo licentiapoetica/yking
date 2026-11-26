@@ -11,11 +11,11 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/plan"
-	"yking/internal/revoke"
-	"yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/revoke"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 // The revoke wizard: pick a registered key (connected or not), review

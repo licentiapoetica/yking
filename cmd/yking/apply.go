@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"yking/internal/elevate"
-	"yking/internal/plan"
-	"yking/internal/targets"
+	"github.com/licentiapoetica/yking/internal/elevate"
+	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/targets"
 )
 
 // cmdApply: yking apply [--yes] [--pause-on-error] PLAN.json

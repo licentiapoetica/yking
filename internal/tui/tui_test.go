@@ -12,11 +12,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/sshkey"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/events"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 func keyMsg(s string) tea.KeyMsg {
@@ -511,6 +512,9 @@ func TestLinkFlow(t *testing.T) {
 }
 
 func TestEventsScreenDefaultsAndPlan(t *testing.T) {
+	old := eventsConfigPath
+	eventsConfigPath = filepath.Join(t.TempDir(), "none.toml") // as if not set up yet
+	defer func() { eventsConfigPath = old }()
 	krPath := filepath.Join(t.TempDir(), "keyring.toml")
 	kr := keyring.New()
 	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
@@ -538,7 +542,13 @@ func TestEventsScreenDefaultsAndPlan(t *testing.T) {
 		kinds = append(kinds, string(st.Kind)+" "+st.Path)
 	}
 	all := strings.Join(kinds, "\n")
-	for _, want := range []string{"install /usr/local/bin/yking", "write_file /etc/yking/events.toml", "write_file /etc/udev/rules.d/90-yking.rules", "write_file /etc/systemd/system/yking-event@.service"} {
+	wants := []string{"install /usr/local/bin/yking", "write_file /etc/yking/events.toml"}
+	for _, f := range []struct{ path, content string }{{"/etc/udev/rules.d/90-yking.rules", events.Rule}, {"/etc/systemd/system/yking-event@.service", events.Unit}} {
+		if b, err := os.ReadFile(f.path); err != nil || string(b) != f.content {
+			wants = append(wants, "write_file "+f.path) // only planned when not already identical
+		}
+	}
+	for _, want := range wants {
 		if !strings.Contains(all, want) {
 			t.Errorf("plan missing %q:\n%s", want, all)
 		}

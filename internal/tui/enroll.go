@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/detect"
-	"yking/internal/enroll"
-	"yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/enroll"
+	"github.com/licentiapoetica/yking/internal/keyring"
 )
 
 const (

@@ -12,9 +12,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/askpass"
-	"yking/internal/detect"
-	"yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/askpass"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 // linkScreen proves which YubiKey holds an SSH key made outside yking

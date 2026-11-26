@@ -19,7 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // deadmanTimeout is how long a PAM change stays without confirmation.

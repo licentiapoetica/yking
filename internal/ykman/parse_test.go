@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"yking/internal/runner"
+	"github.com/licentiapoetica/yking/internal/runner"
 )
 
 func fixture(t *testing.T, name string) []byte {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 func appliedPAM(t *testing.T, name string) (*plan.Applier, *plan.Manifest, string, string) {

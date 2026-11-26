@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // Default locations.

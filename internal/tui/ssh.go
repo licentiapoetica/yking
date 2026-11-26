@@ -16,11 +16,11 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/askpass"
-	"yking/internal/detect"
-	"yking/internal/fido"
-	"yking/internal/keyring"
-	"yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/askpass"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/fido"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 const (

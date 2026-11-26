@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/elevate"
-	"yking/internal/plan"
-	"yking/internal/targets"
+	"github.com/licentiapoetica/yking/internal/elevate"
+	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/targets"
 )
 
 // review shows a plan's diff before anything is written. It can carry

@@ -14,7 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"yking/internal/fsutil"
+	"github.com/licentiapoetica/yking/internal/fsutil"
 )
 
 // DefaultPath is where the system keyring lives.

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/fsutil"
+	"github.com/licentiapoetica/yking/internal/fsutil"
 )
 
 // FormatVersion is the plan file format version.

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/plan"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 // A real sk-ssh-ed25519 public key (test vector, not anyone's key).

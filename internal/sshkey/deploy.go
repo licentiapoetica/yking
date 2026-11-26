@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/keyring"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // SSHBinary is the ssh client. Only this package runs it.

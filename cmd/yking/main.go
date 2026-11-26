@@ -11,12 +11,12 @@ import (
 	"os"
 	"strings"
 
-	"yking/internal/askpass"
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/runner"
-	"yking/internal/tui"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/askpass"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/runner"
+	"github.com/licentiapoetica/yking/internal/tui"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 var version = "0.1.0-dev"
@@ -29,6 +29,7 @@ Usage:
   yking apply [--yes] PLAN    apply a reviewed plan (elevates via sudo/pkexec)
   yking rollback [ID]         undo an applied plan (default: the latest)
   yking history               list applied plans
+  yking doctor                read-only health check (exit 1 on errors)
   yking event add|remove      udev event handler (run by yking-event@.service)
   yking event status          show the plug/unplug configuration and state
   yking version
@@ -68,6 +69,8 @@ func main() {
 		err = cmdRollback(args)
 	case "history":
 		err = cmdHistory()
+	case "doctor":
+		err = cmdDoctor(client, *keyringPath)
 	case "event":
 		err = cmdEvent(client, *keyringPath, args)
 	case "version":

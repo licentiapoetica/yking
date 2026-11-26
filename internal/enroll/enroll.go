@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // Request is what the user chose in the enroll form.

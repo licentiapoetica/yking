@@ -9,14 +9,17 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/events"
-	"yking/internal/fsutil"
-	"yking/internal/keyring"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/events"
+	"github.com/licentiapoetica/yking/internal/fsutil"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // eventsScreen configures what happens when a YubiKey is plugged in or
 // pulled out, and installs the pieces (binary, config, udev rule, unit).
+
+// eventsConfigPath is read for the current settings (tests override it).
+var eventsConfigPath = events.ConfigPath
 
 type eventsScreen struct {
 	keys     []keyring.Key
@@ -35,7 +38,7 @@ func newEventsScreen(krPath string) eventsScreen {
 		return s
 	}
 	s.keys = kr.Keys
-	if b, err := os.ReadFile(events.ConfigPath); err == nil {
+	if b, err := os.ReadFile(eventsConfigPath); err == nil {
 		if c, err := events.Parse(b); err == nil {
 			s.cfg = *c
 		}

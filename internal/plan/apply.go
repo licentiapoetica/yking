@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/fsutil"
-	"yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/fsutil"
+	"github.com/licentiapoetica/yking/internal/keyring"
 )
 
 // DefaultBackupRoot holds one directory of backups per applied plan.

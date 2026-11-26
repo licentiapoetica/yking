@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 var t0 = time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)

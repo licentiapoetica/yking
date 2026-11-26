@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"yking/internal/elevate"
-	"yking/internal/events"
-	"yking/internal/keyring"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/elevate"
+	"github.com/licentiapoetica/yking/internal/events"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 // cmdEvent: yking event add|remove|status

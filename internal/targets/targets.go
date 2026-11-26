@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"yking/internal/events"
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/events"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // Default returns the production targets.

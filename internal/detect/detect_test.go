@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"yking/internal/keyring"
-	"yking/internal/runner"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/runner"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 type fakeRunner struct {

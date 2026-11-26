@@ -13,11 +13,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/sshkey"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 var (
@@ -50,6 +50,7 @@ const (
 	modeRevoke
 	modeLink
 	modeEvents
+	modeDoctor
 )
 
 type scanDoneMsg struct {
@@ -82,6 +83,7 @@ type model struct {
 	revoke     revokeScreen
 	link       linkScreen
 	events     eventsScreen
+	doctor     doctorScreen
 	// pendingArchive: revoked key files to move once the plan applied.
 	pendingArchive []string
 	coverage       map[string]bool // serial → PAM credential confirmed
@@ -127,6 +129,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rep != nil && m.cursor >= len(m.rep.Keys) {
 			m.cursor = 0
 		}
+		return m, nil
+	case keyTestMsg:
+		style := okStyle
+		head := "Key test passed"
+		if msg.err != nil {
+			m.status = errStyle.Render("Key test: " + msg.err.Error())
+			return m, nil
+		}
+		if !msg.ok {
+			style, head = errStyle, "Key test FAILED"
+		}
+		m.status = style.Render(head+":") + "\n  " + strings.Join(msg.lines, "\n  ")
 		return m, nil
 	case applyDoneMsg:
 		m.mode = modeKeys
@@ -181,6 +195,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLink(msg)
 	case modeEvents:
 		return m.updateEvents(msg)
+	case modeDoctor:
+		return m.updateDoctor(msg)
 	default:
 		return m.updateKeys(msg)
 	}
@@ -243,6 +259,21 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeU2F
 			m.status = ""
 			return m, m.u2fCheck(k.Serial)
+		}
+	case "h":
+		m.doctor = doctorScreen{}
+		m.mode = modeDoctor
+		m.status = ""
+		return m, m.runDoctor()
+	case "t":
+		k, ok := m.selected()
+		switch {
+		case m.scanning || !ok:
+		case k.Known == nil:
+			m.status = warnStyle.Render("Register this key first (e).")
+		default:
+			m.status = dimStyle.Render("Testing " + k.Known.Label + " (silent, no touch)…")
+			return m, m.keyTest(*k.Known)
 		}
 	case "u":
 		m.events = newEventsScreen(m.cfg.KeyringPath)
@@ -312,6 +343,9 @@ func (m model) View() string {
 	case modeReview:
 		b.WriteString(m.review.view(m.height))
 		help = "↑/↓/pgup/pgdn scroll · a apply (asks for sudo) · esc back"
+	case modeDoctor:
+		b.WriteString(m.doctor.view(m.height))
+		help = "↑/↓ scroll · r check again · esc back"
 	case modeEvents:
 		b.WriteString(m.events.view())
 		help = "↑/↓ item · space tick/untick · enter review plan · esc back"
@@ -345,7 +379,7 @@ func (m model) View() string {
 		default:
 			b.WriteString(m.viewKeys())
 		}
-		help = "↑/↓ select · e enroll · c check PAM · s new SSH key · l link SSH key · d deploy · p PAM · u plug/unplug · x revoke · r rescan · q quit"
+		help = "↑/↓ select · e enroll · t test · c check PAM · s SSH key · l link · d deploy · p PAM · u plug/unplug · x revoke · h doctor · r rescan · q quit"
 	}
 
 	if m.status != "" {

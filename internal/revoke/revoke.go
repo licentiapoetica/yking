@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // Cred is a credential position in the user's mapping line.

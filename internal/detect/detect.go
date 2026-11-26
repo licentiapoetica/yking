@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"yking/internal/keyring"
-	"yking/internal/ykman"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
 // KeyReport is everything yking learned about one connected key.

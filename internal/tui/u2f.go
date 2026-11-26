@@ -12,11 +12,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/detect"
-	"yking/internal/fido"
-	"yking/internal/keyring"
-	"yking/internal/pam"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/fido"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // u2fScreen checks whether a key has a PAM credential in the user's

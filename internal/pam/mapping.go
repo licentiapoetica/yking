@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"yking/internal/keyring"
-	"yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // Cred is one pam_u2f credential: "keyHandle,publicKey,coseType,options".

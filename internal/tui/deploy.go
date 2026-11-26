@@ -12,11 +12,11 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"yking/internal/askpass"
-	"yking/internal/detect"
-	"yking/internal/keyring"
-	"yking/internal/plan"
-	"yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/askpass"
+	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 // Deploying is only ever started here, by the user, for one host.
