@@ -1,0 +1,3 @@
+YubiKey 5 NFC (5.4.3) [OTP+FIDO+CCID] Serial: 12345678
+YubiKey 5C Nano (5.7.1) [OTP+FIDO+CCID] Serial: 23456789
+Security Key NFC by Yubico (5.4.3) [FIDO]

@@ -1,0 +1,1 @@
+YubiKey Manager (ykman) version: 5.9.2

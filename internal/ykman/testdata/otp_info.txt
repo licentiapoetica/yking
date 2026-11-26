@@ -1,0 +1,2 @@
+Slot 1: programmed
+Slot 2: empty
