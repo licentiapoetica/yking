@@ -9,8 +9,8 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/chalresp"
 	"github.com/licentiapoetica/yking/internal/events"
-	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/fsutil"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 )

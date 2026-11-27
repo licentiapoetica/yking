@@ -70,6 +70,13 @@ and with a unified kernel image built by mkinitcpio and booted by GRUB
 .IR /etc/kernel/cmdline ,
 fallback image
 .IR /boot/EFI/Linux/yking-fallback.efi ).
+Before and after the switch, GRUB's default entry
+.RB ( GRUB_DEFAULT=0 )
+must boot the image: for a UKI an entry that chainloads it, e.g. a script
+.I /etc/grub.d/09_uki_default
+with
+.BR "chainloader /EFI/Linux/arch-linux.efi" ;
+GRUB's own entry for a UKI system loads no initramfs and cannot boot.
 .TP
 .B luks repair
 Rebuild the boot files after a failed migration.

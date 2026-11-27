@@ -71,6 +71,9 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 			return nil, err
 		}
 	}
+	if err := CheckGrubWouldBoot(""); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(CrypttabInitramfs); err == nil {
 		return nil, fmt.Errorf("%s exists (deprecated); merge it into %s first", CrypttabInitramfs, Crypttab)
 	}
@@ -224,6 +227,9 @@ func VerifyBoot(changed []string) error {
 	}
 	cfg, err := os.ReadFile(GrubCfg)
 	if err != nil {
+		return err
+	}
+	if err := DefaultBoots(string(cfg), grubDefaultValue(), ""); err != nil {
 		return err
 	}
 	if _, err := os.Stat(GrubFallback); err == nil {

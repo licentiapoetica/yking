@@ -166,8 +166,13 @@ func MigratePlanUKI(v Volume, b Boot, now time.Time) (*plan.Plan, error) {
 	if preset.Kernel != KernelImage {
 		return nil, fmt.Errorf("%s builds from %q, not %s", LinuxPreset, preset.Kernel, KernelImage)
 	}
-	if _, err := UKIRelPath(preset.UKI); err != nil {
+	ukiRel, err := UKIRelPath(preset.UKI)
+	if err != nil {
 		return nil, err
+	}
+	// grub-mkconfig runs after the switch; its default entry must boot the UKI.
+	if err := CheckGrubWouldBoot(ukiRel); err != nil {
+		return nil, fmt.Errorf("%w — add a GRUB entry that chainloads %s first (see man yking)", err, ukiRel)
 	}
 	conf, err := os.ReadFile(MkinitcpioConf)
 	if err != nil {
@@ -337,6 +342,13 @@ func verifyUKI(method string) error {
 	}
 	preset, err := ParsePreset(pb)
 	if err != nil {
+		return err
+	}
+	rel, err := UKIRelPath(preset.UKI)
+	if err != nil {
+		return err
+	}
+	if err := checkGrubBoots(rel); err != nil {
 		return err
 	}
 	switch method {
