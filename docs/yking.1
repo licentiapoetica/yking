@@ -95,10 +95,20 @@ Plug/unplug handler run by
 .B status
 shows the configuration.
 .TP
+.BR deps " [" install ]
+List missing tools and services (pcscd, CCID driver, pam_u2f, …);
+.B install
+installs the packages (pacman or apt) and enables
+.B pcscd.socket
+after a confirmation.
+.TP
 .B version
 Print the version.
 .SH TUI
 The key list shows connected and registered keys. Keys:
+.TP
+.B I
+Install missing tools and services (shown only when something is missing).
 .TP
 .B e
 Register the selected key.

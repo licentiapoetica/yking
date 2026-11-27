@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"path/filepath"
 	"strings"
 )
 
@@ -109,19 +110,19 @@ func ReplaceHooks(conf string, old, hooks []string) (string, error) {
 // for the passphrase after token-timeout (30s). NOTE: with the key present
 // but no touch / a wrong PIN, systemd 262 does NOT fall back to the
 // passphrase — unplug the key and reboot, or use the fallback entry.
-func CrypttabLine(name, uuid string) string {
-	return fmt.Sprintf("%s UUID=%s none fido2-device=auto,x-initrd.attach", name, uuid)
+func CrypttabLine(name, uuid string, extra ...string) string {
+	return fmt.Sprintf("%s UUID=%s none %s", name, uuid, strings.Join(append([]string{"fido2-device=auto", "x-initrd.attach"}, extra...), ","))
 }
 
 // RenderCrypttab writes/replaces the entry for name in an existing
 // /etc/crypttab (possibly only comments), keeping every other line.
-func RenderCrypttab(existing, name, uuid string) string {
+func RenderCrypttab(existing, name, uuid string, extra ...string) string {
 	var lines []string
 	replaced := false
 	for _, l := range strings.Split(strings.TrimRight(existing, "\n"), "\n") {
 		f := strings.Fields(l)
 		if len(f) > 0 && !strings.HasPrefix(f[0], "#") && f[0] == name {
-			lines = append(lines, CrypttabLine(name, uuid))
+			lines = append(lines, CrypttabLine(name, uuid, extra...))
 			replaced = true
 			continue
 		}
@@ -131,7 +132,7 @@ func RenderCrypttab(existing, name, uuid string) string {
 	}
 	if !replaced {
 		lines = append(lines, "# yking: root volume, unlocked in the initramfs (FIDO2 key or passphrase)")
-		lines = append(lines, CrypttabLine(name, uuid))
+		lines = append(lines, CrypttabLine(name, uuid, extra...))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -334,4 +335,110 @@ func ValidateFallbackScript(path string, content []byte) error {
 		return errors.New("GRUB script differs from what yking generates")
 	}
 	return nil
+}
+
+// CryptDevice is a parsed cryptdevice=<device>:<name>[:<options>] (the
+// busybox "encrypt" hook's parameter).
+type CryptDevice struct {
+	Device  string // UUID=…, PARTUUID=…, LABEL=…, PARTLABEL=… or a /dev path
+	Name    string
+	Options []string
+}
+
+// ParseCryptdevice reads one cryptdevice= parameter. The device may itself
+// contain ':' (/dev/disk/by-path/pci-0000:00:1f.2-…), so the last field is
+// options only when it consists of options yking knows.
+func ParseCryptdevice(param string) (CryptDevice, bool) {
+	v, ok := strings.CutPrefix(param, "cryptdevice=")
+	if !ok {
+		return CryptDevice{}, false
+	}
+	parts := strings.Split(v, ":")
+	n := len(parts)
+	if n < 2 {
+		return CryptDevice{}, false
+	}
+	c := CryptDevice{Device: strings.Join(parts[:n-1], ":"), Name: parts[n-1]}
+	if opts := strings.Split(parts[n-1], ","); n >= 3 && knownOptions(opts) {
+		c = CryptDevice{Device: strings.Join(parts[:n-2], ":"), Name: parts[n-2], Options: opts}
+	}
+	if c.Device == "" || c.Name == "" {
+		return CryptDevice{}, false
+	}
+	return c, true
+}
+
+// encryptOptions maps the encrypt hook's options to crypttab options.
+var encryptOptions = map[string]string{
+	"allow-discards":     "discard",
+	"no-read-workqueue":  "no-read-workqueue",
+	"no-write-workqueue": "no-write-workqueue",
+}
+
+func knownOptions(opts []string) bool {
+	for _, o := range opts {
+		if _, ok := encryptOptions[o]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// CrypttabOptions converts the options; an unknown one is an error (it is
+// never dropped silently).
+func (c CryptDevice) CrypttabOptions() ([]string, error) {
+	var out []string
+	for _, o := range c.Options {
+		t, ok := encryptOptions[o]
+		if !ok {
+			return nil, fmt.Errorf("cryptdevice option %q has no crypttab equivalent yking knows; edit by hand", o)
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// resolveDev follows /dev symlinks (tests replace it).
+var resolveDev = filepath.EvalSymlinks
+
+// Names reports whether the parameter's device is v and its name v's
+// mapping.
+func (c CryptDevice) Names(v Volume) bool {
+	if c.Name != v.Mapper {
+		return false
+	}
+	if u, ok := strings.CutPrefix(c.Device, "UUID="); ok && strings.EqualFold(u, v.UUID) {
+		return true
+	}
+	path := c.Device
+	for prefix, dir := range map[string]string{"UUID=": "by-uuid", "PARTUUID=": "by-partuuid", "LABEL=": "by-label", "PARTLABEL=": "by-partlabel"} {
+		if rest, ok := strings.CutPrefix(c.Device, prefix); ok {
+			path = "/dev/disk/" + dir + "/" + rest
+		}
+	}
+	a, err1 := resolveDev(path)
+	b, err2 := resolveDev(v.Device)
+	return err1 == nil && err2 == nil && a == b
+}
+
+// FindCryptdevice returns the cryptdevice= of grubLine that opens v.
+func FindCryptdevice(grubLine string, v Volume) (CryptDevice, error) {
+	var seen []string
+	for _, f := range strings.Fields(grubLine) {
+		c, ok := ParseCryptdevice(f)
+		if !ok {
+			continue
+		}
+		if c.Names(v) {
+			return c, nil
+		}
+		if p := strings.Split(f, ":"); len(p) >= 3 && p[len(p)-2] == v.Mapper {
+			return CryptDevice{}, fmt.Errorf("%s: option(s) %q unknown to yking (known: allow-discards, no-read-workqueue, no-write-workqueue); edit by hand", f, p[len(p)-1])
+		}
+		seen = append(seen, f)
+	}
+	if len(seen) == 0 {
+		return CryptDevice{}, errors.New("no cryptdevice= on the GRUB kernel command line (GRUB_CMDLINE_LINUX in /etc/default/grub)")
+	}
+	return CryptDevice{}, fmt.Errorf("%s does not open %s as %q", strings.Join(seen, " "), v.Device, v.Mapper)
 }

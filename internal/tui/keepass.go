@@ -104,7 +104,6 @@ func (m model) openKeePass() (tea.Model, tea.Cmd) {
 // otpCheck is otpAccess on this machine (tests replace it).
 var otpCheck = func() string { return fido.OTPAccess(fido.DefaultSysRoot, "/dev") }
 
-
 // kpRead re-reads the plugged keys (they are swapped while this screen is
 // open); never while a write runs.
 func (m model) kpRead() tea.Cmd {

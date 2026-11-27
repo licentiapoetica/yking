@@ -1026,7 +1026,9 @@ func TestLUKSEnrollStaysInTUI(t *testing.T) {
 
 func TestLUKSSlotTable(t *testing.T) {
 	oldV, oldB, oldP, oldS, oldN := luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot, luksNow
-	defer func() { luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot, luksNow = oldV, oldB, oldP, oldS, oldN }()
+	defer func() {
+		luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot, luksNow = oldV, oldB, oldP, oldS, oldN
+	}()
 	luksVolumes = func() ([]luks.Volume, error) {
 		return []luks.Volume{{Device: "/dev/vda2", UUID: "aaaa1111", Version: 2, Root: true}, {Device: "/dev/vdb1", UUID: "bbbb2222", Version: 1}}, nil
 	}

@@ -64,3 +64,21 @@ func TestDebianNamesAndMergedFix(t *testing.T) {
 		t.Fatalf("%q from %+v", got, p)
 	}
 }
+
+func TestActions(t *testing.T) {
+	p := Check(system("ID=arch\n", "pcscd", "gpg", "/run/pcscd/pcscd.comm"))
+	pkgs, units := Actions(p)
+	if strings.Join(pkgs, " ") != "pcsclite ccid gnupg" || strings.Join(units, " ") != "pcscd.socket" {
+		t.Fatalf("%v %v", pkgs, units)
+	}
+	if a := InstallArgs(Arch, pkgs); strings.Join(a, " ") != "pacman -S --needed --noconfirm pcsclite ccid gnupg" {
+		t.Fatal(a)
+	}
+	if InstallArgs(Other, pkgs) != nil {
+		t.Fatal("unknown distro must not install")
+	}
+	p = Check(system("ID=arch\n", "/run/pcscd/pcscd.comm"))
+	if pkgs, units := Actions(p); len(pkgs) != 0 || units[0] != "pcscd.socket" {
+		t.Fatalf("%v %v", pkgs, units)
+	}
+}

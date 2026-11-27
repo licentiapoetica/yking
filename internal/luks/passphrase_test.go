@@ -188,3 +188,50 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("mode %v", fi.Mode())
 	}
 }
+
+func TestCryptdeviceForms(t *testing.T) {
+	old := resolveDev
+	defer func() { resolveDev = old }()
+	links := map[string]string{
+		"/dev/disk/by-partuuid/aaaa-01":                  "/dev/nvme0n1p2",
+		"/dev/nvme0n1p2":                                 "/dev/nvme0n1p2",
+		"/dev/disk/by-path/pci-0000:00:1f.2-ata-1-part2": "/dev/nvme0n1p2",
+	}
+	resolveDev = func(p string) (string, error) {
+		if r, ok := links[p]; ok {
+			return r, nil
+		}
+		return "", os.ErrNotExist
+	}
+	v := Volume{Device: "/dev/nvme0n1p2", UUID: "11111111-2222-3333-4444-555555555555", Mapper: "cryptroot", Root: true, Version: 2}
+	for line, wantOpts := range map[string]string{
+		"quiet cryptdevice=UUID=11111111-2222-3333-4444-555555555555:cryptroot root=/dev/mapper/root":          "",
+		"cryptdevice=UUID=11111111-2222-3333-4444-555555555555:cryptroot:allow-discards root=/dev/mapper/root": "discard",
+		"cryptdevice=/dev/nvme0n1p2:cryptroot:allow-discards,no-read-workqueue":                                "discard,no-read-workqueue",
+		"cryptdevice=PARTUUID=aaaa-01:cryptroot":                                                               "",
+		"cryptdevice=/dev/disk/by-path/pci-0000:00:1f.2-ata-1-part2:cryptroot":                                 "",
+	} {
+		c, err := FindCryptdevice(line, v)
+		if err != nil {
+			t.Errorf("%s: %v", line, err)
+			continue
+		}
+		opts, err := c.CrypttabOptions()
+		if err != nil || strings.Join(opts, ",") != wantOpts {
+			t.Errorf("%s: opts %v %v", line, opts, err)
+		}
+	}
+	for _, line := range []string{
+		"root=/dev/sda1",
+		"cryptdevice=UUID=99999999-0000-0000-0000-000000000000:cryptroot",
+		"cryptdevice=UUID=11111111-2222-3333-4444-555555555555:other",
+		"cryptdevice=UUID=11111111-2222-3333-4444-555555555555:cryptroot:weird-option",
+	} {
+		if _, err := FindCryptdevice(line, v); err == nil {
+			t.Errorf("%s: accepted", line)
+		}
+	}
+	if got := CrypttabLine("cryptroot", "1111", "discard"); got != "cryptroot UUID=1111 none fido2-device=auto,x-initrd.attach,discard" {
+		t.Fatal(got)
+	}
+}

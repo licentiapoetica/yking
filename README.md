@@ -22,6 +22,7 @@ Building does not update the installed copy. After a rebuild, run `./bin/yking` 
 ./bin/yking                 # TUI
 yking detect                # list connected keys
 yking doctor                # health check
+yking deps [install]        # missing tools and services
 yking history               # applied changes
 yking rollback [ID]         # undo one
 yking rollback --user [ID]  # undo a change to your own files (u2f_keys, ~/.ssh/config)

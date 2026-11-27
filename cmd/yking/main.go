@@ -36,6 +36,7 @@ Usage:
   yking luks enroll           add the plugged-in key as a FIDO2 keyslot (root)
   yking event add|remove      udev event handler (run by yking-event@.service)
   yking event status          show the plug/unplug configuration and state
+  yking deps [install]        list (or install) missing tools and services
   yking version
 
 Flags:
@@ -86,6 +87,8 @@ func main() {
 		err = cmdEvent(client, *keyringPath, args)
 	case "pgp":
 		err = cmdPGP(client, args)
+	case "deps":
+		err = cmdDeps(args)
 	case "version":
 		fmt.Println("yking", version)
 	case "help", "-h", "--help":

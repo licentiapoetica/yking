@@ -49,7 +49,9 @@ type Problem struct {
 	What     string
 	For      string
 	Required bool
-	Fix      string // shell command (may be empty)
+	Fix      string   // shell command to show (may be empty)
+	Pkgs     []string // packages that fix it (Install)
+	Unit     string   // systemd unit to enable --now
 }
 
 // System is what Check looks at (tests replace it).
@@ -129,7 +131,14 @@ func Check(s System) []Problem {
 			if fix == "" {
 				fix = "install " + t.Bin
 			}
-			add(Problem{What: t.Bin + " missing", For: t.For, Required: t.Required, Fix: fix})
+			p := Problem{What: t.Bin + " missing", For: t.For, Required: t.Required, Fix: fix}
+			if d != Other {
+				p.Pkgs = strings.Fields(pkgOf(d, t))
+			}
+			if t.Bin == "pcscd" {
+				p.Unit = pcscdUnit
+			}
+			add(p)
 			continue
 		}
 		if t.Bin != "pcscd" {
@@ -137,15 +146,15 @@ func Check(s System) []Problem {
 		}
 		if !s.Exists(s.CCIDDriver) {
 			pkg := map[Distro]string{Arch: "ccid", Debian: "libccid"}[d]
-			add(Problem{What: "CCID driver missing", For: "pcscd cannot see the YubiKey", Required: true, Fix: Install(d, pkg)})
+			add(Problem{What: "CCID driver missing", For: "pcscd cannot see the YubiKey", Required: true, Fix: Install(d, pkg), Pkgs: strings.Fields(pkg)})
 		}
 		if !s.Exists(s.PCSCSocket) {
-			add(Problem{What: "pcscd not running", For: t.For, Required: true, Fix: "sudo systemctl enable --now pcscd.socket"})
+			add(Problem{What: "pcscd not running", For: t.For, Required: true, Fix: "sudo systemctl enable --now " + pcscdUnit, Unit: pcscdUnit})
 		}
 	}
 	if s.PAMModule != nil && !s.PAMModule() {
 		pkg := map[Distro]string{Arch: "pam-u2f", Debian: "libpam-u2f"}[d]
-		add(Problem{What: "pam_u2f.so missing", For: "logging in with a key", Required: true, Fix: Install(d, pkg)})
+		add(Problem{What: "pam_u2f.so missing", For: "logging in with a key", Required: true, Fix: Install(d, pkg), Pkgs: strings.Fields(pkg)})
 	}
 	if s.OTPAccess != nil {
 		if why := s.OTPAccess(); why != "" && !strings.HasPrefix(why, "no YubiKey") {
@@ -162,6 +171,37 @@ func Check(s System) []Problem {
 		}
 	}
 	return append(req, opt...)
+}
+
+const pcscdUnit = "pcscd.socket"
+
+// Actions is what yking can fix by itself: packages and units, deduplicated.
+func Actions(ps []Problem) (pkgs, units []string) {
+	seen := map[string]bool{}
+	for _, p := range ps {
+		for _, k := range p.Pkgs {
+			if !seen[k] {
+				seen[k] = true
+				pkgs = append(pkgs, k)
+			}
+		}
+		if p.Unit != "" && !seen[p.Unit] {
+			seen[p.Unit] = true
+			units = append(units, p.Unit)
+		}
+	}
+	return pkgs, units
+}
+
+// InstallArgs is the non-interactive install command for pkgs.
+func InstallArgs(d Distro, pkgs []string) []string {
+	switch d {
+	case Arch:
+		return append([]string{"pacman", "-S", "--needed", "--noconfirm"}, pkgs...)
+	case Debian:
+		return append([]string{"apt-get", "install", "-y"}, pkgs...)
+	}
+	return nil
 }
 
 // Fixes merges the install commands of problems into one per kind, so the

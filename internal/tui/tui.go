@@ -14,6 +14,7 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/deps"
 	"github.com/licentiapoetica/yking/internal/detect"
+	"github.com/licentiapoetica/yking/internal/elevate"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/pgp"
 	"github.com/licentiapoetica/yking/internal/sshkey"
@@ -58,6 +59,8 @@ const (
 	modeKeePass
 	modeRun
 )
+
+type depsDoneMsg struct{ err error }
 
 type scanDoneMsg struct {
 	rep      *detect.Report
@@ -192,6 +195,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 		return m, nil
+	case depsDoneMsg:
+		if msg.err != nil {
+			m.status = errStyle.Render("Install: " + msg.err.Error())
+		} else {
+			m.status = okStyle.Render("Installed.")
+		}
+		m.scanning = true
+		return m, m.scan()
 	case keyTestMsg:
 		style := okStyle
 		head := "Key test passed"
@@ -389,6 +400,25 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = dimStyle.Render("Testing " + k.Known.Label + " (silent, no touch)…")
 			return m, m.keyTest(*k.Known)
 		}
+	case "I":
+		if pkgs, units := deps.Actions(m.deps); len(pkgs)+len(units) == 0 {
+			return m, nil
+		}
+		cmd, err := elevate.SelfTUI("deps", "install", "--tui", sockArg)
+		if err != nil {
+			m.status = errStyle.Render(err.Error())
+			return m, nil
+		}
+		return m.startRun(runJob{
+			title:    "Install missing tools",
+			cmd:      cmd,
+			key:      m.onlyKey(),
+			noCancel: true, // never cut off a package manager
+			hold:     true,
+			outLines: 12,
+			back:     modeKeys,
+			done:     func(r runResult) tea.Msg { return depsDoneMsg{err: r.err} },
+		})
 	case "g":
 		return m.openPGP()
 	case "v":
@@ -541,7 +571,10 @@ func (m model) screen(height int) (string, string) {
 			help = "q quit"
 			break
 		}
-		help = "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · g PGP · v KeePassXC · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
+		if pkgs, units := deps.Actions(m.deps); len(pkgs)+len(units) > 0 {
+			help = "I install missing · "
+		}
+		help += "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · g PGP · v KeePassXC · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
 	}
 	return b.String(), help
 }

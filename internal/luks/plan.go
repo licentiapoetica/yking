@@ -52,9 +52,13 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 	// What GRUB boots NEXT time (not /proc/cmdline, which may be stale after
 	// a rollback without reboot) decides the fallback entry and the check.
 	grubLine := GrubCmdline(string(grub))
-	wantParam := "cryptdevice=UUID=" + v.UUID + ":" + v.Mapper
-	if !strings.Contains(" "+grubLine+" ", " "+wantParam+" ") {
-		return nil, fmt.Errorf("GRUB kernel command line %q lacks %q", grubLine, wantParam)
+	cd, err := FindCryptdevice(grubLine, v)
+	if err != nil {
+		return nil, err
+	}
+	ctOpts, err := cd.CrypttabOptions() // e.g. allow-discards → discard: TRIM keeps working
+	if err != nil {
+		return nil, err
 	}
 	newGrub, _, err := RemoveCryptdevice(string(grub))
 	if err != nil {
@@ -69,7 +73,7 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 		return nil, fmt.Errorf("%s exists (deprecated); merge it into %s first", CrypttabInitramfs, Crypttab)
 	}
 	ct, _ := os.ReadFile(Crypttab)
-	newCT := RenderCrypttab(string(ct), v.Mapper, v.UUID)
+	newCT := RenderCrypttab(string(ct), v.Mapper, v.UUID, ctOpts...)
 
 	old := strings.Fields(grubLine)
 	if !strings.Contains(" "+grubLine, " root=") {

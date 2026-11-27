@@ -141,3 +141,23 @@ func TestMissingToolsShown(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallMissingFromTUI(t *testing.T) {
+	m := keysModel(t, 120, 40)
+	if mm := send(t, m, keyMsg("I")); mm.mode != modeKeys {
+		t.Fatal("I with nothing missing")
+	}
+	m = send(t, m, scanDoneMsg{rep: m.rep, kr: m.kr, deps: []deps.Problem{
+		{What: "pcscd not running", Required: true, Unit: "pcscd.socket"}}})
+	if !strings.Contains(ansi.Strip(m.View()), "install missing") {
+		t.Fatal("no I in the help")
+	}
+	next, _ := m.Update(keyMsg("I"))
+	mm := next.(model)
+	if mm.mode != modeRun || !mm.run.job.noCancel {
+		t.Fatalf("mode %v", mm.mode)
+	}
+	if args := strings.Join(mm.run.job.cmd.Args, " "); !strings.Contains(args, "deps install --tui "+sockArg) {
+		t.Fatalf("args %q", args)
+	}
+}
