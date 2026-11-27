@@ -16,7 +16,8 @@ import (
 type pamScreen struct {
 	states    []pam.State
 	desired   []pam.Config
-	takeover  bool // replace hand-written pam_u2f lines with yking ones
+	takeover  bool   // replace hand-written pam_u2f lines with yking ones
+	dmNote    string // the running login screen is one yking does not know
 	cursor    int
 	facts     pam.Facts
 	mapping   string
@@ -50,6 +51,9 @@ func newPAMScreen(krPath string) pamScreen {
 		return s
 	}
 	s.states = sts
+	if unit, svc := pam.DisplayManager(); unit != "" && svc == "" {
+		s.dmNote = "login screen " + unit + " is not supported yet; its logins keep the password"
+	}
 	// Services that are off start with the unlock the others already use.
 	counts := map[pam.Unlock]int{}
 	for _, st := range sts {
@@ -199,6 +203,9 @@ func (s pamScreen) view() string {
 		return b.String()
 	}
 
+	if s.dmNote != "" {
+		b.WriteString(warnStyle.Render("! "+s.dmNote) + "\n\n")
+	}
 	fmt.Fprintf(&b, "  %s %s %s\n", dimStyle.Render(pad("Service", 40)), dimStyle.Render(pad("Now", 32)), dimStyle.Render("New"))
 	for i, st := range s.states {
 		cur := st.Current.String()

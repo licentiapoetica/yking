@@ -443,3 +443,67 @@ func TestPolkitAsksRoot(t *testing.T) {
 		t.Errorf("wheel member: %v", b)
 	}
 }
+
+const plasmaloginPAM = `#%PAM-1.0
+
+auth        include     system-login
+-auth       optional    pam_gnome_keyring.so
+-auth       optional    pam_kwallet6.so
+
+account     include     system-login
+
+password    include     system-login
+-password   optional    pam_gnome_keyring.so    use_authtok
+
+session     optional    pam_keyinit.so          force revoke
+session     include     system-login
+-session    optional    pam_gnome_keyring.so    auto_start
+-session    optional    pam_kwallet6.so         auto_start
+`
+
+// KDE's Plasma Login Manager (replaces SDDM): found, off, and switched on
+// like SDDM.
+func TestPlasmaLogin(t *testing.T) {
+	etc, vendor := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(etc, "plasmalogin"), []byte(plasmaloginPAM), 0o644)
+	sts, err := Discover(etc, vendor)
+	if err != nil || len(sts) != 1 || sts[0].Service.Name != "plasmalogin" || !sts[0].Service.LoginPath {
+		t.Fatalf("%+v %v", sts, err)
+	}
+	st := sts[0]
+	if st.Current.Mode != ModeOff || st.Custom != "" {
+		t.Fatalf("current %+v custom %q", st.Current, st.Custom)
+	}
+	out, err := st.Render(Config{Mode: ModeOr, Unlock: UnlockPIN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls, _ := Parse(out)
+	if got, ok, why := Classify(ls); !ok || got.Mode != ModeOr || got.Unlock != UnlockPIN {
+		t.Fatalf("%+v %s\n%s", got, why, out)
+	}
+	if err := Validate(filepath.Join(EtcDir, "plasmalogin"), []byte(out)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "pam_kwallet6.so") {
+		t.Fatal("other lines lost")
+	}
+}
+
+func TestDisplayManager(t *testing.T) {
+	old := DisplayManagerLink
+	defer func() { DisplayManagerLink = old }()
+	DisplayManagerLink = filepath.Join(t.TempDir(), "display-manager.service")
+	if u, s := DisplayManager(); u != "" || s != "" {
+		t.Fatal("no link: nothing")
+	}
+	os.Symlink("/usr/lib/systemd/system/plasmalogin.service", DisplayManagerLink)
+	if u, s := DisplayManager(); u != "plasmalogin.service" || s != "plasmalogin" {
+		t.Fatal(u, s)
+	}
+	os.Remove(DisplayManagerLink)
+	os.Symlink("/usr/lib/systemd/system/greetd.service", DisplayManagerLink)
+	if u, s := DisplayManager(); u != "greetd.service" || s != "" {
+		t.Fatal("unknown manager must report no service", u, s)
+	}
+}

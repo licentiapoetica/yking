@@ -41,6 +41,7 @@ type Service struct {
 var Known = []Service{
 	{"sudo", "sudo (admin commands in a terminal)", true, false},
 	{"sddm", "SDDM login screen", true, false},
+	{"plasmalogin", "Plasma login screen", true, false},
 	{"kde", "KDE lock screen", false, true},
 	{"polkit-1", "admin prompts in the desktop (polkit)", false, false},
 	{"login", "text console login (Ctrl+Alt+F2…)", true, false},
@@ -252,4 +253,26 @@ func serviceExists(name string) bool {
 		}
 	}
 	return false
+}
+
+// displayManagers maps a display manager's unit to its PAM login service.
+var displayManagers = map[string]string{
+	"sddm.service":        "sddm",
+	"plasmalogin.service": "plasmalogin",
+	"gdm.service":         "gdm-password",
+	"lightdm.service":     "lightdm",
+}
+
+// DisplayManagerLink is the systemd alias naming the active login screen.
+var DisplayManagerLink = "/etc/systemd/system/display-manager.service"
+
+// DisplayManager returns the active display manager's unit and the PAM
+// service yking manages for it ("" when yking does not know it).
+func DisplayManager() (unit, service string) {
+	target, err := os.Readlink(DisplayManagerLink)
+	if err != nil {
+		return "", ""
+	}
+	unit = filepath.Base(target)
+	return unit, displayManagers[unit]
 }
