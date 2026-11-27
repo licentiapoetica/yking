@@ -1,0 +1,242 @@
+.TH YKING 1 2026-11-27 "yking" "User Commands"
+.SH NAME
+yking \- set up YubiKeys on Linux: SSH, PAM, LUKS, PGP, KeePassXC, plug/unplug actions
+.SH SYNOPSIS
+.B yking
+.RB [ \-keyring
+.IR FILE ]
+.br
+.B yking
+.I COMMAND
+.RI [ ARGS ]
+.SH DESCRIPTION
+Without a command,
+.B yking
+starts an interactive terminal interface (TUI) that runs as the user.
+Every change to system files is shown as a diff first and applied with
+.BR sudo (8)
+only after confirmation; changes to the user's own files are applied
+without root.
+Each apply keeps backups and can be undone with
+.BR "yking rollback" .
+.PP
+yking never resets a YubiKey, never changes PINs and writes only into
+empty slots (see
+.BR SAFETY ).
+.SH COMMANDS
+.TP
+.BR detect " [" \-\-json ]
+Read-only inventory of the connected keys.
+.TP
+.B doctor
+Read-only health check of the whole setup. Exits 1 on errors.
+.TP
+.BR apply " [" \-\-yes "] " \fIPLAN\fR
+Apply a reviewed plan (the TUI does this through
+.BR sudo ).
+.TP
+.B history
+List applied plans.
+.TP
+.BR rollback " [" \-\-user "] [" \-\-force "] [" \-\-yes "] [" \fIID\fR ]
+Undo an applied plan (default: the latest).
+.B \-\-user
+undoes a change to the user's own files and needs no root.
+.B \-\-force
+restores even if a file changed after yking wrote it.
+.TP
+.BR export " [" \-o " \fIFILE\fR] [" \-\-no\-ssh ]
+Export the setup for another machine.
+.TP
+.BI import " FILE"
+Stage an export; finish it in the TUI with
+.BR i .
+.TP
+.B luks status
+LUKS volumes, keyslots and the boot unlock method.
+.TP
+.BR "luks enroll" " [" \-\-device " \fIDEV\fR] [" \-\-unlock " " pin+touch | touch ]
+Add the plugged-in key as a FIDO2 keyslot.
+.TP
+.BR "luks migrate" " [" \-\-dry\-run ]
+Switch the initramfs to systemd unlocking (needed for FIDO2 at boot).
+.TP
+.B luks repair
+Rebuild the boot files after a failed migration.
+.TP
+.BR "luks identify" " [" \-\-record ]
+Find which keyslot belongs to the plugged-in key.
+.TP
+.BI "luks wipe \-\-slot " N\fR[,\fIM\fR...] " \fR[" "\-\-device " DEV\fR]
+Remove FIDO2 keyslots from the disk (the passphrase stays).
+.TP
+.BR event " " add | remove | status
+Plug/unplug handler run by
+.BR yking-event@.service ;
+.B status
+shows the configuration.
+.TP
+.B version
+Print the version.
+.SH TUI
+The key list shows connected and registered keys. Keys:
+.TP
+.B e
+Register the selected key.
+.TP
+.B t
+Silent key test (no touch).
+.TP
+.B c
+Check the key's PAM credential; add one.
+.TP
+.BR s ", " l ", " d
+Create an SSH key on the key, link an existing one, deploy it to servers.
+.TP
+.B o
+Manage yking's
+.B Host
+blocks in
+.IR ~/.ssh/config .
+.TP
+.B p
+PAM per service: off, key or password, key and password, key only.
+.TP
+.B g
+PGP: list GnuPG identities, create one, add a signing subkey, copy the
+signing and encryption subkeys to the plugged-in key, back them up,
+set git signing, remove them from disk (card-only).
+.TP
+.B v
+KeePassXC: write one HMAC-SHA1 challenge-response secret into OTP slot 2
+of each key.
+.TP
+.B b
+Disk: LUKS FIDO2 enrollment and boot switch.
+.TP
+.B u
+Plug/unplug actions: lock the screen and reset sudo when the last trigger
+key is pulled out; wake the lock screen when a key is plugged in.
+.TP
+.B x
+Revoke a key (lost or replaced).
+.TP
+.B i
+Finish an import.
+.TP
+.B h
+Doctor.
+.TP
+.B U
+Update the installed copy
+.RI ( /usr/local/bin/yking )
+to this build.
+.TP
+.B ?
+All keys of the current screen.
+.PP
+Long screens scroll with PgUp/PgDn or the mouse wheel. Select text with
+Shift+drag.
+.SH PGP
+Card writes never happen in
+.IR ~/.gnupg .
+The subkeys are exported into a throwaway GnuPG home in
+.B $XDG_RUNTIME_DIR
+(must be a tmpfs), moved to the card there, and the throwaway home is
+deleted, so the same subkeys can go to every key.
+Only empty slots, or slots holding the same fingerprint, are written.
+The Admin PIN is asked once and only while at least 2 tries are left.
+Touch is set to
+.BR on .
+.PP
+.B f
+adds
+.B disable-ccid
+and
+.B pcsc-shared
+to
+.IR scdaemon.conf ,
+so gpg and ykman can share the key.
+.SH KEEPASSXC
+The secret exists only in memory while the screen is open; write it to
+every key in one visit and keep the paper copy
+.RB ( p )
+to set up a key later
+.RB ( i ).
+The secret is passed to ykman on stdin, written only into an empty slot 2
+and verified with a test challenge.
+.B u
+installs a udev rule that gives the logged-in user the OTP interface,
+which challenge-response over USB needs.
+.SH SAFETY
+yking runs ykman only through an allowlist without reset, delete, PIN or
+interface commands. The one exception is clearing OTP slot 2
+.RB ( x
+on the KeePassXC screen), offered only for a key whose slot just failed the
+challenge-response test, after the key's label was typed.
+.PP
+Key-only PAM needs at least two registered keys and one service that still
+accepts a password. Lock screens always get pam_u2f's
+.B interactive
+option; lock on unplug is refused, and skipped at run time, while a lock
+screen lacks it.
+.PP
+Locked out of the desktop: press Ctrl+Alt+F2, log in on the console and
+run
+.BR "loginctl unlock-sessions" .
+.SH FILES
+.TP
+.I /etc/yking/keyring.toml
+Registered keys and what each one holds (no secrets).
+.TP
+.I /etc/yking/events.toml
+Plug/unplug configuration.
+.TP
+.I /var/lib/yking/backups/
+Backups of system files, one directory per applied plan.
+.TP
+.I ~/.local/state/yking/backups/
+Backups of the user's own files.
+.TP
+.I ~/.cache/yking/plans/
+Plans waiting for the elevated apply.
+.TP
+.I /usr/local/bin/yking
+Installed copy, used by the plug/unplug handler.
+.TP
+.I /etc/udev/rules.d/90-yking.rules
+.TQ
+.I /etc/systemd/system/yking-event@.service
+Plug/unplug handler.
+.TP
+.I /etc/udev/rules.d/69-yking-otp.rules
+OTP interface access for challenge-response.
+.TP
+.I /run/yking/
+Keys seen by the plug/unplug handler.
+.TP
+.I ~/.config/Yubico/u2f_keys
+pam_u2f credentials.
+.TP
+.I ~/.gnupg/scdaemon.conf
+gpg card access.
+.SH ENVIRONMENT
+.TP
+.B XDG_RUNTIME_DIR
+Location of the throwaway GnuPG home (tmpfs).
+.TP
+.B GNUPGHOME
+The user's GnuPG home (default
+.IR ~/.gnupg ).
+.SH EXIT STATUS
+0 on success, 1 on errors (for
+.BR doctor :
+errors found), 2 on usage errors.
+.SH SEE ALSO
+.BR ykman (1),
+.BR gpg (1),
+.BR pamu2fcfg (1),
+.BR pam_u2f (8),
+.BR systemd-cryptenroll (1),
+.BR ssh-keygen (1),
+.BR keepassxc (1)
