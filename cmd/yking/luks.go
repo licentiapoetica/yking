@@ -333,10 +333,12 @@ func luksRepair() error {
 	if err := runReloads(luks.BootPaths); err != nil {
 		return fmt.Errorf("rebuild failed: %w — do not reboot; the fallback entry or `yking rollback` may help", err)
 	}
+	syscall.Sync()
 	if err := luks.VerifyBoot(luks.BootPaths); err != nil {
 		return fmt.Errorf("verification failed: %w — do not reboot", err)
 	}
 	luks.ClearPending()
+	syscall.Sync()
 	fmt.Println("yking: boot images and GRUB menu rebuilt and verified.")
 	return nil
 }

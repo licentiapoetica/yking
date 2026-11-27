@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/licentiapoetica/yking/internal/plan"
@@ -93,7 +94,7 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 	}{
 		{FallbackConf, string(conf), 0o644}, // the OLD config, for the fallback image
 		{MkinitcpioConf, newConf, 0o644},
-		{Crypttab, newCT, 0o644},
+		{Crypttab, newCT, modeOf(Crypttab, 0o600)}, // keep e.g. 0600: crypttab may name key files
 		{GrubDefault, newGrub, 0o644},
 		{GrubFallback, script, 0o755},
 		{ConsoleDropIn, ConsoleDropInContent, 0o644},
@@ -104,6 +105,14 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 		}
 	}
 	return p, nil
+}
+
+// modeOf returns path's permission bits, or def if it does not exist.
+func modeOf(path string, def os.FileMode) os.FileMode {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Mode().Perm()
+	}
+	return def
 }
 
 func dedupe(in []string) []string {
@@ -230,8 +239,12 @@ func SetPending(id string) error {
 	return os.WriteFile(PendingMarker, []byte(id+"\n"), 0o644)
 }
 
-// ClearPending removes the marker.
-func ClearPending() { os.Remove(PendingMarker) }
+// ClearPending removes the marker (after everything is on disk).
+func ClearPending() {
+	syscall.Sync()
+	os.Remove(PendingMarker)
+	syscall.Sync()
+}
 
 // Pending returns the plan id of an unfinished boot change, or "".
 func Pending() string {

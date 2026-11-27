@@ -137,6 +137,10 @@ func bootRollback(a *plan.Applier, m *plan.Manifest, cause error) error {
 // (udev, systemd, mkinitcpio, GRUB). The commands come from yking, never
 // from a plan. Returns the first failure.
 func runReloads(changed []string) error {
+	// mkinitcpio and grub-mkconfig do not fsync their output: without this,
+	// a hard reset right after "done" can lose grub.cfg or an image (seen in
+	// the VM: new initramfs, old grub.cfg).
+	defer syscall.Sync()
 	var first error
 	for _, c := range targets.Reloads(changed) {
 		fmt.Printf("yking: running %s\n", strings.Join(c, " "))

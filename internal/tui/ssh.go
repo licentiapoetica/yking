@@ -350,6 +350,8 @@ type introExec struct {
 	stderr  bytes.Buffer
 	stdout  io.Writer
 	tty     io.Reader
+	// pauseAlways waits for Enter after success too (output worth reading).
+	pauseAlways bool
 }
 
 func (e *introExec) SetStdin(r io.Reader) {
@@ -371,6 +373,10 @@ func (e *introExec) Run() error {
 		io.WriteString(e.stdout, e.intro)
 	}
 	err := e.cmd.Run()
+	if err == nil && e.pauseAlways && e.stdout != nil && e.tty != nil {
+		fmt.Fprint(e.stdout, "\nPress Enter to return to yking… ")
+		bufio.NewReader(e.tty).ReadString('\n')
+	}
 	if err != nil && e.stdout != nil && e.tty != nil {
 		fmt.Fprintf(e.stdout, "\nyking: %s failed (%v).\nPress Enter to return to yking… ", filepath.Base(e.cmd.Path), err)
 		bufio.NewReader(e.tty).ReadString('\n')

@@ -15,6 +15,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 	"github.com/licentiapoetica/yking/internal/ykman"
@@ -579,5 +580,51 @@ func TestEventsRefuseLockWithLockoutRisk(t *testing.T) {
 	m = send(t, m, keyMsg("enter"))
 	if m.mode != modeReview {
 		t.Fatalf("with interactive: mode=%v err=%q", m.mode, m.events.err)
+	}
+}
+
+func TestLUKSScreen(t *testing.T) {
+	oldV, oldB, oldP := luksVolumes, luksDiscoverBoot, luksPending
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending = oldV, oldB, oldP }()
+	root := luks.Volume{Device: "/dev/nvme0n1p2", UUID: "aaaa1111", Version: 2, Mapper: "cryptroot", Root: true, RootLV: true}
+	luksVolumes = func() ([]luks.Volume, error) {
+		return []luks.Volume{root, {Device: "/dev/sdb1", UUID: "x", Version: 1}}, nil
+	}
+	luksDiscoverBoot = func() luks.Boot { return luks.Boot{Method: "encrypt", GRUB: true} }
+	luksPending = func() string { return "" }
+
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	kr := keyring.New()
+	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	kr.Add("22222222", "home-backup", keyring.RoleHomeBackup, t0())
+	kr.Save(krPath)
+
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
+	v := m.View()
+	for _, want := range []string{"/dev/nvme0n1p2 · LUKS2 · cryptroot → LVM", "IGNORED at boot", "daily", "not enrolled", "LUKS1: FIDO2 needs LUKS2", "PIN only is impossible"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+	// Switching boot with nothing enrolled is refused before any sudo.
+	m2, cmd := m.Update(keyMsg("m"))
+	if mm := m2.(model); cmd != nil || !strings.Contains(mm.luks.err, "enroll at least one key") {
+		t.Fatalf("migrate without keys: cmd=%v err=%q", cmd != nil, mm.luks.err)
+	}
+	// With daily enrolled (per keyring) it runs sudo yking luks migrate.
+	kr.Find("11111111").LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaa1111", Keyslot: 1, PINRequired: true, UPRequired: true}}
+	kr.Save(krPath)
+	m = send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
+	if v := m.View(); !strings.Contains(v, "✓ daily        slot 1 · PIN + touch") || !strings.Contains(v, "only one key enrolled") {
+		t.Errorf("enrolled view:\n%s", v)
+	}
+	if _, cmd := m.Update(keyMsg("m")); cmd == nil {
+		t.Error("migrate did not start")
+	}
+	// Interrupted boot change is shown prominently.
+	luksPending = func() string { return "20261127-000147-a4c9d4" }
+	m = send(t, model{cfg: Config{KeyringPath: krPath}}, keyMsg("b"))
+	if !strings.Contains(m.View(), "Press R to repair BEFORE rebooting") {
+		t.Error("pending marker not shown")
 	}
 }
