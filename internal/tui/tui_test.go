@@ -18,6 +18,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/sshkey"
+	"github.com/licentiapoetica/yking/internal/transfer"
 	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
@@ -626,5 +627,40 @@ func TestLUKSScreen(t *testing.T) {
 	m = send(t, model{cfg: Config{KeyringPath: krPath}}, keyMsg("b"))
 	if !strings.Contains(m.View(), "Press R to repair BEFORE rebooting") {
 		t.Error("pending marker not shown")
+	}
+}
+
+func TestImportChecklist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldEv := eventsConfigPath
+	eventsConfigPath = filepath.Join(t.TempDir(), "none.toml")
+	defer func() { eventsConfigPath = oldEv }()
+
+	pk, _ := sshkey.ParsePub(testPub)
+	kr := keyring.New()
+	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	kr.Find("11111111").SSH = []keyring.SSHKey{{Fingerprint: pk.Fingerprint, Type: pk.Type, Path: "yk-main-02", PublicKey: testPub, CreatedAt: t0()}}
+	kr.Find("11111111").LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaaaaaa-0000-1111-2222-333333333333", Keyslot: 1}}
+	exp := &transfer.Export{Version: transfer.Version, Created: t0(), Keys: kr.Keys,
+		PAM:      map[string]transfer.PAMSetting{"sudo": {Mode: "only", Unlock: "pin"}},
+		SSHFiles: []transfer.SSHFile{{Name: "yk-main-02", Private: "LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0K", Public: testPub}}}
+	if err := transfer.SavePending(home, exp); err != nil {
+		t.Fatal(err)
+	}
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("i"))
+	v := m.View()
+	for _, want := range []string{"1. Register the keys", "daily not registered yet", "PAM credential per key", "sudo: key only · PIN only", "Disk encryption (optional): enroll daily"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("checklist missing %q:\n%s", want, v)
+		}
+	}
+	m = send(t, m, keyMsg("1"))
+	if m.mode != modeReview || !strings.Contains(strings.Join(m.review.lines, "\n"), `+serial = "11111111"`) {
+		t.Fatalf("step 1: mode=%v err=%q", m.mode, m.imp.err)
+	}
+	if fi, err := os.Stat(filepath.Join(home, ".ssh", "yk-main-02")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("ssh handle not written privately: %v %v", fi, err)
 	}
 }

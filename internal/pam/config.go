@@ -257,3 +257,29 @@ func Apply(base []Line, cfg Config) ([]Line, error) {
 	out = append(out, add...)
 	return append(out, base[at:]...), nil
 }
+
+// Tag is the stable text form of a Mode ("off", "or", "and", "only").
+func (m Mode) Tag() string { return m.tag() }
+
+// Tag is the stable text form of an Unlock ("pin+touch", "pin", "touch").
+func (u Unlock) Tag() string { return u.tag() }
+
+// ParseMode parses Mode.Tag.
+func ParseMode(s string) (Mode, error) {
+	for _, m := range Modes {
+		if m.tag() == s {
+			return m, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown PAM mode %q", s)
+}
+
+// ParseUnlock parses Unlock.Tag.
+func ParseUnlock(s string) (Unlock, error) {
+	for _, u := range Unlocks {
+		if u.tag() == s {
+			return u, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown unlock %q", s)
+}

@@ -52,6 +52,7 @@ const (
 	modeEvents
 	modeDoctor
 	modeLUKS
+	modeImport
 )
 
 type scanDoneMsg struct {
@@ -86,6 +87,7 @@ type model struct {
 	events     eventsScreen
 	doctor     doctorScreen
 	luks       luksScreen
+	imp        importScreen
 	// pendingArchive: revoked key files to move once the plan applied.
 	pendingArchive []string
 	coverage       map[string]bool // serial → PAM credential confirmed
@@ -201,6 +203,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDoctor(msg)
 	case modeLUKS:
 		return m.updateLUKS(msg)
+	case modeImport:
+		return m.updateImport(msg)
 	default:
 		return m.updateKeys(msg)
 	}
@@ -264,6 +268,11 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, m.u2fCheck(k.Serial)
 		}
+	case "i":
+		m.imp = newImportScreen(m.cfg.KeyringPath)
+		m.mode = modeImport
+		m.status = ""
+		return m, nil
 	case "b":
 		m.luks = newLUKSScreen(m.cfg.KeyringPath)
 		m.mode = modeLUKS
@@ -352,6 +361,9 @@ func (m model) View() string {
 	case modeReview:
 		b.WriteString(m.review.view(m.height))
 		help = "↑/↓/pgup/pgdn scroll · a apply (asks for sudo) · esc back"
+	case modeImport:
+		b.WriteString(m.imp.view())
+		help = "1 keys + SSH files · p PAM · u plug/unplug · b disk · D done · esc back"
 	case modeLUKS:
 		b.WriteString(m.luks.view())
 		help = "e enroll · ←/→ unlock mode · m switch boot · s status · R repair · esc back"
@@ -391,7 +403,7 @@ func (m model) View() string {
 		default:
 			b.WriteString(m.viewKeys())
 		}
-		help = "↑/↓ select · e enroll · t test · c check PAM · s SSH key · l link · d deploy · p PAM · b disk (LUKS) · u plug/unplug · x revoke · h doctor · r rescan · q quit"
+		help = "↑/↓ select · e enroll · t test · c check PAM · s SSH key · l link · d deploy · p PAM · b disk (LUKS) · u plug/unplug · x revoke · i import · h doctor · r rescan · q quit"
 	}
 
 	if m.status != "" {

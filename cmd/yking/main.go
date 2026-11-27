@@ -30,6 +30,8 @@ Usage:
   yking rollback [ID]         undo an applied plan (default: the latest)
   yking history               list applied plans
   yking doctor                read-only health check (exit 1 on errors)
+  yking export [-o FILE]      export the setup for another machine
+  yking import FILE           stage an export; then press i in the TUI
   yking luks status           LUKS volumes, keyslots, boot unlock method (root)
   yking luks enroll           add the plugged-in key as a FIDO2 keyslot (root)
   yking event add|remove      udev event handler (run by yking-event@.service)
@@ -71,6 +73,10 @@ func main() {
 		err = cmdRollback(args)
 	case "history":
 		err = cmdHistory()
+	case "export":
+		err = cmdExport(*keyringPath, args)
+	case "import":
+		err = cmdImport(args)
 	case "luks":
 		err = cmdLUKS(client, *keyringPath, args)
 	case "doctor":
