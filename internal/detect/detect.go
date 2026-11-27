@@ -50,16 +50,37 @@ type Report struct {
 	Missing []keyring.Key
 }
 
+// Progress is one step of a running scan, for a live display. A step is
+// reported once when it starts (Done false) and once when it ends.
+type Progress struct {
+	Step string // stable id of the step
+	Text string
+	Done bool
+}
+
 // Scan inventories every connected key. It only uses read-only ykman
 // commands (enforced by ykman's allowlist).
 func Scan(ctx context.Context, c *ykman.Client, kr *keyring.Keyring) (*Report, error) {
+	return ScanProgress(ctx, c, kr, nil)
+}
+
+// ScanProgress is Scan, reporting each step to progress (may be nil).
+func ScanProgress(ctx context.Context, c *ykman.Client, kr *keyring.Keyring, progress func(Progress)) (*Report, error) {
+	say := func(step, text string, done bool) {
+		if progress != nil {
+			progress(Progress{Step: step, Text: text, Done: done})
+		}
+	}
 	rep := &Report{}
+	say("version", "starting ykman", false)
 	v, err := c.Version(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ykman not usable: %w", err)
 	}
 	rep.YkmanVersion = v
+	say("version", "ykman "+v, true)
 
+	say("list", "looking for YubiKeys on USB", false)
 	devs, err := c.ListDevices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing keys: %w", err)
@@ -74,10 +95,30 @@ func Scan(ctx context.Context, c *ykman.Client, kr *keyring.Keyring) (*Report, e
 		}
 	}
 
+	switch n := len(serials); n {
+	case 0:
+		say("list", "no YubiKey with a serial plugged in", true)
+	case 1:
+		say("list", "found 1 YubiKey", true)
+	default:
+		say("list", fmt.Sprintf("found %d YubiKeys", n), true)
+	}
+
 	connected := map[string]bool{}
 	for _, s := range serials {
 		connected[s] = true
-		rep.Keys = append(rep.Keys, inventory(ctx, c, kr, s))
+		name := s
+		if k := kr.Find(s); k != nil {
+			name = fmt.Sprintf("%s (%s)", k.Label, s)
+		}
+		say("key:"+s, "reading "+name, false)
+		r := inventory(ctx, c, kr, s)
+		rep.Keys = append(rep.Keys, r)
+		what := "read " + name
+		if r.Known == nil {
+			what += " — new key"
+		}
+		say("key:"+s, what, true)
 	}
 	for _, k := range kr.Keys {
 		if !connected[k.Serial] {
