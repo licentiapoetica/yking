@@ -23,6 +23,8 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 		return nil, errors.New("the root volume must be LUKS2")
 	case b.Method != "encrypt":
 		return nil, fmt.Errorf("initramfs unlock hook is %q, not the old \"encrypt\" — nothing to migrate", b.Method)
+	case b.UKI != "":
+		return nil, errors.New("boot uses a unified kernel image; use MigratePlanUKI")
 	case !b.GRUB:
 		return nil, errors.New("only GRUB is supported")
 	case len(b.Problems) > 0:
@@ -142,19 +144,23 @@ func Rebuilds(changed []string) [][]string {
 		}
 		return false
 	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 	var out [][]string
-	if has(FallbackConf) {
-		if _, err := os.Stat(FallbackConf); err == nil {
+	if has(FallbackConf) || has(FallbackCmdline) {
+		switch {
+		case exists(FallbackConf) && exists(FallbackCmdline): // UKI: a fallback UKI with the old line
+			out = append(out, []string{"mkinitcpio", "-c", FallbackConf, "-k", KernelImage, "-U", FallbackUKI, "--cmdline", FallbackCmdline})
+		case exists(FallbackConf):
 			out = append(out, []string{"mkinitcpio", "-c", FallbackConf, "-k", KernelImage, "-g", FallbackImage})
-		} else {
+		default:
 			// rolled back: the fallback image is no longer referenced
-			out = append(out, []string{"rm", "-f", FallbackImage})
+			out = append(out, []string{"rm", "-f", FallbackImage, FallbackUKI})
 		}
 	}
 	if has(ConsoleDropIn) {
 		out = append(out, []string{"systemctl", "daemon-reload"})
 	}
-	if has(MkinitcpioConf) || has(CrypttabInitramfs) || has(Crypttab) || has(ConsoleDropIn) || has(MkinitcpioDropIn) {
+	if has(MkinitcpioConf) || has(CrypttabInitramfs) || has(Crypttab) || has(ConsoleDropIn) || has(MkinitcpioDropIn) || has(KernelCmdline) {
 		out = append(out, []string{"mkinitcpio", "-P"})
 	}
 	if has(GrubDefault) || has(GrubFallback) {
@@ -183,7 +189,8 @@ func VerifyBoot(changed []string) error {
 	touched := false
 	for _, c := range changed {
 		switch c {
-		case MkinitcpioConf, CrypttabInitramfs, Crypttab, GrubDefault, GrubFallback, FallbackConf, ConsoleDropIn, MkinitcpioDropIn:
+		case MkinitcpioConf, CrypttabInitramfs, Crypttab, GrubDefault, GrubFallback, FallbackConf, ConsoleDropIn, MkinitcpioDropIn,
+			KernelCmdline, FallbackCmdline:
 			touched = true
 		}
 	}
@@ -197,6 +204,9 @@ func VerifyBoot(changed []string) error {
 	hooks, err := ParseHooks(string(conf))
 	if err != nil {
 		return err
+	}
+	if DetectUKI("/etc/mkinitcpio.d", KernelCmdline, "/boot/initramfs-linux.img") != "" {
+		return verifyUKI(MethodOf(hooks))
 	}
 	switch MethodOf(hooks) {
 	case "sd-encrypt":
@@ -233,7 +243,7 @@ func VerifyBoot(changed []string) error {
 const PendingMarker = "/var/lib/yking/boot-pending"
 
 // BootPaths are all files whose change requires a rebuild.
-var BootPaths = []string{FallbackConf, MkinitcpioConf, Crypttab, CrypttabInitramfs, ConsoleDropIn, MkinitcpioDropIn, GrubDefault, GrubFallback}
+var BootPaths = []string{FallbackConf, FallbackCmdline, MkinitcpioConf, Crypttab, CrypttabInitramfs, ConsoleDropIn, MkinitcpioDropIn, KernelCmdline, GrubDefault, GrubFallback}
 
 // SetPending writes the marker with the plan id.
 func SetPending(id string) error {

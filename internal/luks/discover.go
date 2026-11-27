@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -112,6 +113,7 @@ type Boot struct {
 	CryptParam string // the cryptdevice=… / rd.luks.… token(s) found
 	GRUB       bool   // /etc/default/grub + grub-mkconfig present
 	ESPUUID    string // filesystem UUID of the partition mounted at /boot
+	UKI        string // why boot looks like a unified kernel image ("" = not)
 	Problems   []string
 }
 
@@ -181,8 +183,29 @@ func DiscoverBoot() Boot {
 	if !b.GRUB {
 		b.Problems = append(b.Problems, "GRUB not found (only GRUB is supported so far)")
 	}
+	b.UKI = DetectUKI("/etc/mkinitcpio.d", KernelCmdline, "/boot/initramfs-linux.img")
 	if out, err := exec.Command("findmnt", "-n", "-o", "UUID", "/boot").Output(); err == nil {
 		b.ESPUUID = strings.TrimSpace(string(out))
 	}
 	return b
+}
+
+var ukiRe = regexp.MustCompile(`(?m)^\s*[A-Za-z]+_uki=`)
+
+// DetectUKI says why boot looks like a unified kernel image: a mkinitcpio
+// preset that builds one, or a kernel command line in /etc/kernel/cmdline
+// with no separate initramfs. "" = a classic initramfs.
+func DetectUKI(presetDir, kernelCmdline, initramfs string) string {
+	presets, _ := filepath.Glob(filepath.Join(presetDir, "*.preset"))
+	for _, p := range presets {
+		if b, err := os.ReadFile(p); err == nil && ukiRe.Match(b) {
+			return filepath.Base(p) + " builds one"
+		}
+	}
+	if _, err := os.Stat(kernelCmdline); err == nil {
+		if _, err := os.Stat(initramfs); err != nil {
+			return "kernel line in " + kernelCmdline + ", no " + filepath.Base(initramfs)
+		}
+	}
+	return ""
 }

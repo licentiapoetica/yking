@@ -14,10 +14,12 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/licentiapoetica/yking/internal/askpass"
 	"github.com/licentiapoetica/yking/internal/elevate"
 	"github.com/licentiapoetica/yking/internal/fido"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/luks"
+	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/targets"
 	"github.com/licentiapoetica/yking/internal/ykman"
 )
@@ -48,7 +50,13 @@ func cmdLUKS(c *ykman.Client, krPath string, args []string) error {
 	case "identify":
 		return luksIdentify(c, krPath, len(args) > 1 && args[1] == "--record")
 	case "migrate":
-		return luksMigrate(len(args) > 1 && args[1] == "--dry-run")
+		switch {
+		case len(args) == 3 && args[1] == "--tui":
+			return luksMigrate(false, args[2])
+		case len(args) == 1 || (len(args) == 2 && args[1] == "--dry-run"):
+			return luksMigrate(len(args) == 2, "")
+		}
+		return errors.New("usage: yking luks migrate [--dry-run]")
 	case "backup":
 		return luksBackup(args[1:])
 	case "passphrase":
@@ -144,8 +152,15 @@ func readSecret(tty *os.File, prompt string) ([]byte, error) {
 }
 
 // luksMigrate switches boot to the systemd initramfs so enrolled FIDO2 keys
-// unlock the root volume. Shows the diff and asks before applying.
-func luksMigrate(dryRun bool) error {
+// unlock the root volume. Shows the diff and asks before applying (in the
+// TUI when sock is set).
+func luksMigrate(dryRun bool, sock string) error {
+	if sock != "" {
+		// The TUI shows stderr lines live; a closed TUI must not kill a
+		// half-done apply (SIGPIPE).
+		os.Stdout = os.Stderr
+		signal.Ignore(syscall.SIGPIPE)
+	}
 	v, err := rootVolume("")
 	if err != nil {
 		return err
@@ -164,7 +179,13 @@ func luksMigrate(dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	p, err := luks.MigratePlan(v, luks.DiscoverBoot(), string(cmdline), time.Now())
+	b := luks.DiscoverBoot()
+	var p *plan.Plan
+	if b.UKI != "" {
+		p, err = luks.MigratePlanUKI(v, b, time.Now())
+	} else {
+		p, err = luks.MigratePlan(v, b, string(cmdline), time.Now())
+	}
 	if err != nil {
 		return err
 	}
@@ -193,7 +214,18 @@ func luksMigrate(dryRun bool) error {
 	fmt.Println("After applying, yking rebuilds the initramfs images and the GRUB menu and checks them;")
 	fmt.Println("if anything is wrong it restores the old files and rebuilds again.")
 	fmt.Println()
-	if err := applyAsRoot(path, false, ""); err != nil {
+	if sock != "" {
+		d, err := p.Diff()
+		if err != nil {
+			return err
+		}
+		if k, err := askpass.Choose(sock, p.Summary()+"\n"+d, []askpass.Option{{Key: "a", Label: "apply"}, {Key: "n", Label: "cancel"}}, time.Time{}); err != nil || k != "a" {
+			return errors.New("cancelled; nothing changed")
+		}
+		if err := applyAsRoot(path, true, sock); err != nil {
+			return err
+		}
+	} else if err := applyAsRoot(path, false, ""); err != nil {
 		return err
 	}
 	fmt.Println()

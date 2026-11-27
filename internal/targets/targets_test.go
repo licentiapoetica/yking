@@ -9,6 +9,7 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/chalresp"
 	"github.com/licentiapoetica/yking/internal/events"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/fsutil"
 	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/sshkey"
@@ -132,5 +133,38 @@ func TestOTPRulePassesElevatedCheck(t *testing.T) {
 	}
 	if got := Reloads([]string{chalresp.RulePath}); len(got) != 2 || got[1][1] != "trigger" {
 		t.Fatalf("%v", got)
+	}
+}
+
+// The files of a UKI switch pass the elevated validators; anything else in
+// those places does not.
+func TestUKIFilesPassValidators(t *testing.T) {
+	script, _ := luks.FallbackScriptUKI("ABCD-1234")
+	for path, content := range map[string]string{
+		luks.KernelCmdline:   "root=/dev/vg0/root rw rootflags=x-systemd.device-timeout=0\n",
+		luks.FallbackCmdline: "cryptdevice=UUID=11111111-2222-3333-4444-555555555555:cryptlvm root=/dev/vg0/root rw\n",
+		luks.GrubFallback:    script,
+	} {
+		tg := Applier()
+		var ok bool
+		for _, t2 := range tg.Targets {
+			if t2.Dir == filepath.Dir(path) {
+				if err := t2.Validate(path, []byte(content)); err != nil {
+					t.Errorf("%s refused: %v", path, err)
+				}
+				ok = true
+			}
+		}
+		if !ok {
+			t.Errorf("%s: no target", path)
+		}
+	}
+	for _, t2 := range Applier().Targets {
+		if t2.Dir == "/etc/kernel" && t2.Validate("/etc/kernel/install.conf", []byte("layout=uki\n")) == nil {
+			t.Error("other /etc/kernel files accepted")
+		}
+	}
+	if r := luks.Rebuilds([]string{luks.KernelCmdline}); len(r) != 1 || r[0][1] != "-P" {
+		t.Errorf("kernel cmdline change must rebuild the preset: %v", r)
 	}
 }

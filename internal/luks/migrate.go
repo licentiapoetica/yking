@@ -3,8 +3,8 @@ package luks
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -331,7 +331,7 @@ func ValidateFallbackScript(path string, content []byte) error {
 	if !strings.HasSuffix(path, "/41_yking_fallback") {
 		return fmt.Errorf("yking only writes its own GRUB script, not %s", path)
 	}
-	if !fallbackRe.Match(content) {
+	if !fallbackRe.Match(content) && !fallbackUKIRe.Match(content) {
 		return errors.New("GRUB script differs from what yking generates")
 	}
 	return nil

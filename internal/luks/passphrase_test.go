@@ -235,3 +235,26 @@ func TestCryptdeviceForms(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestDetectUKI(t *testing.T) {
+	dir := t.TempDir()
+	presets := filepath.Join(dir, "mkinitcpio.d")
+	os.MkdirAll(presets, 0o755)
+	cmdline := filepath.Join(dir, "cmdline")
+	img := filepath.Join(dir, "initramfs-linux.img")
+	os.WriteFile(filepath.Join(presets, "linux.preset"), []byte("PRESETS=('default')\ndefault_image=\"/boot/initramfs-linux.img\"\n#default_uki=\"/efi/EFI/Linux/arch-linux.efi\"\n"), 0o644)
+	os.WriteFile(img, nil, 0o644)
+	if why := DetectUKI(presets, cmdline, img); why != "" {
+		t.Fatalf("classic setup seen as UKI: %s", why)
+	}
+	os.WriteFile(filepath.Join(presets, "linux.preset"), []byte("PRESETS=('default')\ndefault_uki=\"/boot/EFI/Linux/arch-linux.efi\"\n"), 0o644)
+	if why := DetectUKI(presets, cmdline, img); !strings.Contains(why, "linux.preset") {
+		t.Fatalf("preset: %q", why)
+	}
+	os.Remove(filepath.Join(presets, "linux.preset"))
+	os.WriteFile(cmdline, []byte("cryptdevice=UUID=x:cryptlvm"), 0o644)
+	os.Remove(img)
+	if why := DetectUKI(presets, cmdline, img); !strings.Contains(why, "no initramfs-linux.img") {
+		t.Fatalf("cmdline: %q", why)
+	}
+}

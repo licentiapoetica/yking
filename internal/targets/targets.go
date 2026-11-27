@@ -31,6 +31,7 @@ func Default() []plan.Target {
 		{Dir: filepath.Dir(luks.GrubFallback), Validate: luks.ValidateFallbackScript},
 		{Dir: filepath.Dir(luks.ConsoleDropIn), Validate: luks.ValidateConsoleDropIn},
 		{Dir: filepath.Dir(luks.MkinitcpioDropIn), Validate: luks.ValidateMkinitcpioDropIn},
+		{Dir: filepath.Dir(luks.KernelCmdline), Validate: luks.ValidateKernelCmdline},
 	}
 }
 
@@ -63,6 +64,8 @@ func validateYkingFile(path string, content []byte) error {
 		return err
 	case "mkinitcpio-fallback.conf":
 		return luks.ValidateMkinitcpio(path, content)
+	case "kernel-cmdline-fallback":
+		return luks.ValidateKernelCmdline(path, content)
 	default:
 		return fmt.Errorf("unknown yking config file %s", filepath.Base(path))
 	}

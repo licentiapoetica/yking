@@ -126,14 +126,26 @@ func (s luksScreen) enrolledCount() int {
 	return n
 }
 
-func (m model) luksRun(what string, pause bool, args ...string) (tea.Model, tea.Cmd) {
-	cmd, err := elevate.Self(append([]string{"--keyring", m.cfg.KeyringPath, "luks"}, args...)...)
+// luksJob runs `sudo yking luks args…` on the run screen. Boot changes
+// are never cut off (noCancel).
+func (m model) luksJob(title, what string, args ...string) (tea.Model, tea.Cmd) {
+	cmd, err := elevate.SelfTUI(append([]string{"--keyring", m.cfg.KeyringPath, "luks"}, args...)...)
 	if err != nil {
 		m.luks.err = err.Error()
 		return m, nil
 	}
-	run := &introExec{cmd: cmd, pauseAlways: pause, intro: "\nyking: " + what + " (asks for sudo first)\n\n"}
-	return m, tea.Exec(run, func(err error) tea.Msg { return luksDoneMsg{what: what, err: withTail(err, run)} })
+	return m.startRun(runJob{
+		title:    title,
+		cmd:      cmd,
+		key:      m.onlyKey(),
+		noCancel: true,
+		hold:     true,
+		outLines: 15,
+		back:     modeLUKS,
+		done: func(r runResult) tea.Msg {
+			return luksDoneMsg{what: what, err: r.err}
+		},
+	})
 }
 
 func (m model) updateLUKS(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -205,7 +217,7 @@ func (m model) updateLUKS(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.err = "enroll at least one key first (e) — otherwise the switch only adds a key prompt nobody can answer"
 				return m, nil
 			}
-			return m.luksRun("switch boot to the systemd initramfs (FIDO2 unlock)", true, "migrate")
+			return m.luksJob("Switch boot to FIDO2 unlock", "switch boot", "migrate", "--tui", sockArg)
 		case "P":
 			switch {
 			case s.boot.Method != "sd-encrypt":
@@ -262,7 +274,7 @@ func (m model) updateLUKS(msg tea.Msg) (tea.Model, tea.Cmd) {
 				},
 			})
 		case "R":
-			return m.luksRun("repair boot images and GRUB menu", true, "repair")
+			return m.luksJob("Repair boot images and GRUB menu", "repair boot", "repair")
 		}
 	}
 	return m, nil
@@ -293,8 +305,11 @@ func (s luksScreen) view() string {
 	default:
 		b.WriteString("Boot unlock:  " + dimStyle.Render("unknown") + "\n")
 	}
+	if s.boot.UKI != "" {
+		b.WriteString("Boot image:   unified kernel image " + dimStyle.Render("("+s.boot.UKI+")") + "\n")
+	}
 	if _, err := os.Stat(luks.GrubFallback); err == nil {
-		b.WriteString(dimStyle.Render("              GRUB has the \"yking fallback\" entry (old initramfs, passphrase)") + "\n")
+		b.WriteString(dimStyle.Render("              GRUB has the \"yking fallback\" entry (old image, passphrase)") + "\n")
 	}
 	for _, p := range s.boot.Problems {
 		b.WriteString(warnStyle.Render("  ! "+p) + "\n")

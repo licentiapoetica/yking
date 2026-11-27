@@ -61,7 +61,15 @@ key authorizes it; plugged in next to an already enrolled key, that key
 does (PIN and touch), so a disk without passphrase can get new keys.
 .TP
 .BR "luks migrate" " [" \-\-dry\-run ]
-Switch the initramfs to systemd unlocking (needed for FIDO2 at boot).
+Switch the initramfs to systemd unlocking (needed for FIDO2 at boot) and
+add a GRUB entry for a fallback with the old one. Works with a separate
+initramfs (kernel line in
+.IR /etc/default/grub )
+and with a unified kernel image built by mkinitcpio and booted by GRUB
+(kernel line in
+.IR /etc/kernel/cmdline ,
+fallback image
+.IR /boot/EFI/Linux/yking-fallback.efi ).
 .TP
 .B luks repair
 Rebuild the boot files after a failed migration.

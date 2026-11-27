@@ -1,11 +1,11 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"strings"
 	"time"
@@ -237,17 +237,22 @@ func (m model) u2fRegister() (tea.Model, tea.Cmd) {
 		s.err = err.Error()
 		return m, nil
 	}
-	var out bytes.Buffer
-	run := &introExec{
-		cmd:     pam.RegisterCommand(origin),
-		capture: &out,
-		intro: fmt.Sprintf("\nyking: creating a PAM credential on key %q (%s) for %s.\n"+
-			"yking: touch the key when it blinks. If a PIN is asked, enter it ONCE;\n"+
-			"yking: if it is rejected, press Ctrl+C instead of retrying.\n\n", s.key.Known.Label, s.key.Serial, origin),
+	self, err := os.Executable()
+	if err != nil {
+		s.err = err.Error()
+		return m, nil
 	}
-	s.busy = "Waiting for pamu2fcfg…"
-	return m, tea.Exec(run, func(err error) tea.Msg {
-		return u2fRegDoneMsg{out: out.Bytes(), err: withTail(err, run)}
+	k := s.key.Known
+	return m.startRun(runJob{
+		title: "New PAM credential on " + k.Label,
+		lines: []string{"for " + origin + "; touch the key when it blinks"},
+		cmd:   exec.Command(self, "pam", "register"),
+		need:  k, needWhy: "to create its PAM credential",
+		key:  k,
+		back: modeU2F,
+		done: func(r runResult) tea.Msg {
+			return u2fRegDoneMsg{out: r.stdout, err: r.err}
+		},
 	})
 }
 
