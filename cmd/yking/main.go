@@ -42,8 +42,8 @@ Flags:
 `
 
 func main() {
-	// ssh-keygen runs yking as SSH_ASKPASS for the one-shot PIN guard.
-	if os.Getenv(askpass.EnvState) != "" {
+	// ssh and ssh-keygen run yking as SSH_ASKPASS: forward the prompt to the TUI.
+	if os.Getenv(askpass.EnvSock) != "" {
 		os.Exit(askpass.Main(os.Args[1:]))
 	}
 	fs := flag.NewFlagSet("yking", flag.ExitOnError)

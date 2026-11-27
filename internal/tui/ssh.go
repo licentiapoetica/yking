@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/licentiapoetica/yking/internal/askpass"
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/fido"
 	"github.com/licentiapoetica/yking/internal/keyring"
@@ -207,28 +206,15 @@ func (m model) sshPreflight(req sshkey.GenRequest) tea.Cmd {
 }
 
 func (m model) runKeygen(req sshkey.GenRequest, st sshkey.State) (tea.Model, tea.Cmd) {
-	self, err := os.Executable()
-	if err != nil {
-		m.ssh.err = err.Error()
-		return m, nil
-	}
-	info := askpass.Info{Label: req.Label, Serial: req.Serial, Retries: -1}
-	if f := st.Key.FIDO; f != nil {
-		info.Retries, info.MinPINLength = f.PINRetries, f.MinPINLength
-	}
-	sess, err := askpass.Prepare(self, info)
-	if err != nil {
-		m.ssh.err = err.Error()
-		return m, nil
-	}
-	run := &introExec{
-		cmd:   req.Command(sess.Env),
-		intro: fmt.Sprintf("\nyking: creating SSH key ~/.ssh/%s with YubiKey %q (%s).\nyking: touch the key when it blinks.\n\n", req.Name, req.Label, req.Serial),
-	}
-	return m, tea.Exec(run, func(err error) tea.Msg {
-		asked := sess.PINWasRequested()
-		sess.Close()
-		return keygenDoneMsg{req: req, err: withTail(err, run), pinRequested: asked}
+	return m.startRun(runJob{
+		title: fmt.Sprintf("Create SSH key ~/.ssh/%s", req.Name),
+		lines: []string{fmt.Sprintf("on %s (%s)", req.Label, req.Serial)},
+		cmd:   req.Command(nil),
+		key:   st.Key.Known,
+		back:  modeSSH,
+		done: func(r runResult) tea.Msg {
+			return keygenDoneMsg{req: req, err: r.err, pinRequested: r.pinAsked}
+		},
 	})
 }
 
@@ -282,7 +268,7 @@ func (f sshForm) view() string {
 	var b strings.Builder
 	k := f.key
 	b.WriteString(titleStyle.Render(fmt.Sprintf("New SSH key on %q (%s)", k.Known.Label, k.Serial)) + "\n")
-	b.WriteString(dimStyle.Render("Non-resident: nothing is stored on the YubiKey. The file in ~/.ssh is a handle\nthat only works with this key.") + "\n\n")
+	b.WriteString("\n")
 
 	cur := func(i int) string {
 		if f.focus == i {
@@ -311,7 +297,6 @@ func (f sshForm) view() string {
 	b.WriteString("\n" + dimStyle.Render("Will run: ssh-keygen "+strings.Join(quoteArgs(req.Args()), " ")) + "\n")
 	b.WriteString(dimStyle.Render("Creating the key always needs one touch.") + "\n")
 	if f.use.NeedsPIN() {
-		b.WriteString(dimStyle.Render("The PIN is asked once by yking; a wrong PIN stops without retrying.") + "\n")
 	}
 	if f.busy != "" {
 		b.WriteString("\n" + f.busy + "\n")

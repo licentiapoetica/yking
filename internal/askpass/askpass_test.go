@@ -1,89 +1,140 @@
 package askpass
 
 import (
-	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
-type harness struct {
-	s      *Session
-	tty    bytes.Buffer
-	out    bytes.Buffer
-	killed int
-	pin    string
-}
-
-func newHarness(t *testing.T, info Info) *harness {
+func newBroker(t *testing.T) *Broker {
+	t.Helper()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	s, err := Prepare("/usr/bin/yking", info)
+	b, err := NewBroker()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.Close)
-	return &harness{s: s, pin: "123456"}
+	t.Cleanup(b.Close)
+	return b
 }
 
-func (h *harness) run(prompt, kind string) int {
-	var state string
-	for _, e := range h.s.Env {
-		if v, ok := strings.CutPrefix(e, EnvState+"="); ok {
-			state = v
+func sock(b *Broker) string {
+	for _, e := range b.Env("/usr/bin/yking") {
+		if v, ok := strings.CutPrefix(e, EnvSock+"="); ok {
+			return v
 		}
 	}
-	h.out.Reset()
-	return Run(prompt, Deps{
-		Tty:        &h.tty,
-		ReadSecret: func() (string, error) { return h.pin, nil },
-		KillParent: func() error { h.killed++; return nil },
-		PromptKind: kind,
-		StatePath:  state,
-		Stdout:     &h.out,
-	})
+	return ""
 }
 
-func TestOneShot(t *testing.T) {
-	h := newHarness(t, Info{Label: "home-backup", Serial: "22222222", Retries: 8})
-	if code := h.run("Enter PIN for authenticator: ", ""); code != 0 || h.out.String() != "123456\n" || h.killed != 0 {
-		t.Fatalf("first: code=%d out=%q killed=%d", code, h.out.String(), h.killed)
+type result struct {
+	answer string
+	ok     bool
+	err    error
+}
+
+func ask(b *Broker, kind Kind, prompt string) <-chan result {
+	ch := make(chan result, 1)
+	go func() {
+		a, ok, err := Ask(sock(b), kind, prompt)
+		ch <- result{a, ok, err}
+	}()
+	return ch
+}
+
+func next(t *testing.T, b *Broker) *Request {
+	t.Helper()
+	select {
+	case r := <-b.Requests():
+		return r
+	case <-time.After(3 * time.Second):
+		t.Fatal("no request")
 	}
-	if !strings.Contains(h.tty.String(), "8 tries left") {
-		t.Errorf("prompt did not show retries: %q", h.tty.String())
+	return nil
+}
+
+func wait(t *testing.T, ch <-chan result) result {
+	t.Helper()
+	select {
+	case r := <-ch:
+		return r
+	case <-time.After(3 * time.Second):
+		t.Fatal("helper did not return")
 	}
-	if !h.s.PINWasRequested() {
-		t.Error("PINWasRequested = false")
-	}
-	// ssh-keygen asks again => PIN was wrong => kill, send nothing.
-	if code := h.run("Enter PIN for authenticator: ", ""); code == 0 || h.out.Len() != 0 || h.killed != 1 {
-		t.Fatalf("second: code=%d out=%q killed=%d", code, h.out.String(), h.killed)
+	return result{}
+}
+
+func TestEnvForcesAskpass(t *testing.T) {
+	b := newBroker(t)
+	env := strings.Join(b.Env("/usr/bin/yking"), "\n")
+	for _, want := range []string{"SSH_ASKPASS=/usr/bin/yking", "SSH_ASKPASS_REQUIRE=force", EnvSock + "="} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %q: %s", want, env)
+		}
 	}
 }
 
-func TestShortPINNotSent(t *testing.T) {
-	h := newHarness(t, Info{Retries: 8, MinPINLength: 6})
-	h.pin = "1234"
-	if code := h.run("Enter PIN for authenticator: ", ""); code == 0 || h.out.Len() != 0 || h.killed != 1 {
-		t.Fatalf("code=%d out=%q killed=%d", code, h.out.String(), h.killed)
+func TestAnswerAndRefuse(t *testing.T) {
+	b := newBroker(t)
+	h := ask(b, KindAsk, "Enter PIN for ED25519-SK key /home/alice/.ssh/yk-main-01: ")
+	r := next(t, b)
+	if r.Kind != KindAsk || !strings.HasPrefix(r.Prompt, "Enter PIN for ED25519-SK key") {
+		t.Fatalf("request = %+v", r)
 	}
-	h2 := newHarness(t, Info{Retries: 8})
-	h2.pin = ""
-	if code := h2.run("Enter PIN for authenticator: ", ""); code == 0 || h2.out.Len() != 0 {
-		t.Fatal("empty PIN was sent")
+	r.Answer("123456")
+	r.Answer("second answer is ignored")
+	if got := wait(t, h); got.err != nil || !got.ok || got.answer != "123456" {
+		t.Errorf("got %+v", got)
+	}
+
+	h = ask(b, KindAsk, "alice@host.example's password: ")
+	next(t, b).Refuse()
+	if got := wait(t, h); got.ok {
+		t.Errorf("refused request succeeded: %+v", got)
 	}
 }
 
-func TestUnexpectedPrompts(t *testing.T) {
-	h := newHarness(t, Info{Retries: 8})
-	if code := h.run("Enter passphrase: ", ""); code == 0 || h.killed != 1 || h.out.Len() != 0 {
-		t.Error("passphrase prompt should abort")
+// A notice blocks the helper until the TUI (or ssh) ends it; Gone tells
+// the TUI the helper is gone.
+func TestNotifyAndGone(t *testing.T) {
+	b := newBroker(t)
+	h := ask(b, KindNotify, "Confirm user presence for key ED25519-SK SHA256:abc")
+	r := next(t, b)
+	if r.Kind != KindNotify {
+		t.Fatalf("kind = %s", r.Kind)
 	}
-	if code := h.run("Allow use of key?", "confirm"); code == 0 || h.killed != 2 {
-		t.Error("confirm prompt should abort")
+	select {
+	case <-h:
+		t.Fatal("notice returned before it was ended")
+	case <-time.After(100 * time.Millisecond):
 	}
-	if code := h.run("Confirm user presence", "none"); code != 0 || h.killed != 2 {
-		t.Error("notification should pass through without killing")
+	b.Close()
+	if got := wait(t, h); !got.ok {
+		t.Errorf("notice should always succeed: %+v", got)
 	}
-	if h.s.PINWasRequested() {
-		t.Error("no PIN was requested")
+	select {
+	case <-r.Gone:
+	case <-time.After(3 * time.Second):
+		t.Error("Gone not closed")
+	}
+}
+
+func TestNoBroker(t *testing.T) {
+	if _, ok, _ := Ask(t.TempDir()+"/none", KindAsk, "PIN"); ok {
+		t.Error("question without broker succeeded")
+	}
+	if _, ok, _ := Ask(t.TempDir()+"/none", KindNotify, "touch"); !ok {
+		t.Error("notice without broker must not stop ssh")
+	}
+}
+
+func TestBadRequestIgnored(t *testing.T) {
+	b := newBroker(t)
+	if _, ok, _ := Ask(sock(b), Kind("exec"), "x"); ok {
+		t.Error("unknown kind accepted")
+	}
+	select {
+	case r := <-b.Requests():
+		t.Errorf("unknown kind delivered: %+v", r)
+	case <-time.After(100 * time.Millisecond):
 	}
 }

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -265,13 +264,24 @@ func (m model) revokeNextHost() (tea.Model, tea.Cmd) {
 		s.results[h] = sshkey.RemoveResult{Kind: "error: " + err.Error()}
 		return m.revokeNextHost()
 	}
-	var out bytes.Buffer
-	run := &introExec{cmd: cmd, capture: &out, intro: fmt.Sprintf(
-		"\nyking: removing %s from %s's authorized_keys (a backup is kept on the server).\nyking: log in the way you normally do — NOT with the revoked key.\n\n",
-		host.Key.Comment, host.Host)}
+	login := s.logins[s.login]
+	owner := describeLogin(s.keys, login).owner
+	how := "login: ssh default"
+	if owner != nil {
+		how = fmt.Sprintf("login: %s (%s)", filepath.Base(login), owner.Label)
+	}
 	s.busy = "Cleaning " + host.Host + "…"
-	return m, tea.Exec(run, func(err error) tea.Msg {
-		return revokeHostDoneMsg{host: h, out: out.Bytes(), err: withTail(err, run)}
+	return m.startRun(runJob{
+		title:   fmt.Sprintf("Remove %s from %s", host.Key.Comment, host.Host),
+		lines:   []string{how},
+		cmd:     cmd,
+		need:    owner,
+		needWhy: "for the login with " + filepath.Base(login),
+		key:     owner,
+		back:    modeRevoke,
+		done: func(r runResult) tea.Msg {
+			return revokeHostDoneMsg{host: h, out: r.stdout, err: r.err}
+		},
 	})
 }
 
@@ -332,7 +342,7 @@ func (m model) revokePlans() (tea.Model, tea.Cmd) {
 
 func (s revokeScreen) view() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Revoke a key") + dimStyle.Render(" — lost, stolen or retired. The key itself is not needed.") + "\n\n")
+	b.WriteString(titleStyle.Render("Revoke a key") + "\n\n")
 	if s.a == nil {
 		if len(s.keys) == 0 {
 			b.WriteString("No registered keys.\n")
@@ -399,10 +409,7 @@ func (s revokeScreen) view() string {
 		b.WriteString(dimStyle.Render("  (no PAM credential known for this key)") + "\n")
 	}
 	if len(a.Hosts) > 0 {
-		login := "(ssh default)"
-		if l := s.logins[s.login]; l != "" {
-			login = filepath.Base(l)
-		}
+		login := describeLogin(s.keys, s.logins[s.login]).hint(s.connected, "")
 		b.WriteString("\n" + dimStyle.Render("Log in to servers with: ") + "◂ " + login + " ▸" + dimStyle.Render("  (←/→)") + "\n")
 	}
 
@@ -414,7 +421,7 @@ func (s revokeScreen) view() string {
 	for _, w := range a.Warnings {
 		b.WriteString(warnStyle.Render("! "+w) + "\n")
 	}
-	b.WriteString(dimStyle.Render("Also remove this key from websites (passkeys / 2FA) yourself — yking cannot.") + "\n\n")
+	b.WriteString(dimStyle.Render("Remove it from websites (passkeys/2FA) yourself.") + "\n\n")
 	b.WriteString(fmt.Sprintf("Type %q to confirm: ", a.Key.Label) + s.confirm.View() + "\n")
 	if s.busy != "" {
 		b.WriteString("\n" + s.busy + "\n")

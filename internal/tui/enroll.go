@@ -147,7 +147,7 @@ func (f enrollForm) view() string {
 	if f.key.Info.DeviceType != "" {
 		b.WriteString(dimStyle.Render("  " + f.key.Info.DeviceType + " · fw " + f.key.Info.Firmware))
 	}
-	b.WriteString("\n" + dimStyle.Render("Host-side only: adds an entry to the keyring. Nothing is written to the key.") + "\n\n")
+	b.WriteString("\n")
 
 	cursor := func(i int) string {
 		if f.focus == i {

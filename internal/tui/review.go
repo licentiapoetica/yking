@@ -122,15 +122,27 @@ func (m model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.err = err.Error()
 			return m, nil
 		}
-		cmd, err := elevate.Self("apply", "--yes", "--pause-on-error", path)
+		// Applied on the run screen: sudo's PIN/password prompt and, for PAM
+		// changes, the keep-or-roll-back question are asked there.
+		cmd, err := elevate.SelfTUI("apply", "--tui", sockArg, path)
 		if err != nil {
 			r.err = err.Error()
 			return m, nil
 		}
 		id, uid := r.plan.ID, r.userDone
-		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-			os.Remove(path)
-			return applyDoneMsg{id: id, userID: uid, err: err}
+		return m.startRun(runJob{
+			title:    "Apply: " + r.plan.Description,
+			lines:    nil,
+			cmd:      cmd,
+			key:      m.onlyKey(),
+			noCancel: true,
+			hold:     true,
+			outLines: 12,
+			back:     modeReview,
+			done: func(res runResult) tea.Msg {
+				os.Remove(path)
+				return applyDoneMsg{id: id, userID: uid, err: res.err}
+			},
 		})
 	}
 	r.offset = min(max(r.offset, 0), max(len(r.lines)-page, 0))
@@ -176,7 +188,7 @@ func (r review) view(height int) string {
 	if len(r.lines) > page {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("lines %d–%d of %d", r.offset+1, end, len(r.lines))) + "\n")
 	}
-	b.WriteString("\n" + dimStyle.Render("Backups are kept; `yking history` lists them and how to undo.") + "\n")
+	b.WriteString("\n" + dimStyle.Render("backups kept · undo: yking history") + "\n")
 	if r.userDone != "" {
 		b.WriteString(okStyle.Render("Your file is already updated ("+r.userDone+"); press a again to apply the system part.") + "\n")
 	}

@@ -193,7 +193,7 @@ func (m model) buildPAMPlan() (tea.Model, tea.Cmd) {
 func (s pamScreen) view() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("PAM — where the YubiKey can be used") + "\n")
-	b.WriteString(dimStyle.Render("Host-side only (/etc/pam.d). Nothing is written to a key.") + "\n\n")
+	b.WriteString("\n")
 	if len(s.states) == 0 {
 		b.WriteString(errStyle.Render("No PAM services found. "+s.err) + "\n")
 		return b.String()
@@ -242,7 +242,7 @@ func (s pamScreen) view() string {
 			"instead of failing at once when the key is not plugged in (otherwise KDE never prompts again).") + "\n")
 	}
 	if cur.Service.LockScreen && s.desired[s.cursor].Mode == pam.ModeOnly {
-		b.WriteString(dimStyle.Render("Emergency exit if the lock screen ever refuses: Ctrl+Alt+F2, log in, `loginctl unlock-sessions`.") + "\n")
+		b.WriteString(dimStyle.Render("locked out? Ctrl+Alt+F2 → log in → loginctl unlock-sessions") + "\n")
 	}
 	b.WriteString("\n")
 

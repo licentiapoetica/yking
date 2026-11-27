@@ -191,7 +191,7 @@ func (m model) buildEventsPlan() (tea.Model, tea.Cmd) {
 func (s eventsScreen) view() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Plug in / pull out actions") + "\n")
-	b.WriteString(dimStyle.Render("Runs as a small root service started by udev. It never unlocks anything.") + "\n\n")
+	b.WriteString("\n")
 	box := func(on bool) string {
 		if on {
 			return okStyle.Render("[x]")
@@ -208,7 +208,7 @@ func (s eventsScreen) view() string {
 	for i, k := range s.keys {
 		b.WriteString(cur(i) + box(s.triggers[k.Serial]) + fmt.Sprintf(" %-12s %-12s %s", k.Label, k.Role, k.Serial) + "\n")
 	}
-	b.WriteString(dimStyle.Render("  (pulling an unticked key, e.g. a backup, does nothing)") + "\n\n")
+	b.WriteString("\n")
 	n := len(s.keys)
 	b.WriteString("When a trigger key is pulled out:\n")
 	b.WriteString(cur(n) + box(s.cfg.OnRemove.Lock) + " lock the screen\n")

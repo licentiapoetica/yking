@@ -1,197 +1,297 @@
-// Package askpass makes yking act as SSH_ASKPASS for ssh-keygen and ssh so
-// that a FIDO2 PIN is asked for at most ONCE per operation.
+// Package askpass lets ssh and ssh-keygen ask their questions inside the
+// yking TUI instead of on a bare terminal.
 //
-// ssh-keygen retries a wrong PIN up to three times. Eight wrong PINs block
-// FIDO2 and the only recovery is a reset, which would wipe every site
-// registration on the key. So: the first PIN request is answered from a
-// hidden prompt on the terminal; any second request means the PIN was
-// wrong, and yking kills ssh-keygen before it can try again. An empty or
-// too-short PIN is never sent.
+// yking runs them in their own session, without a terminal, and with
+// SSH_ASKPASS=yking and SSH_ASKPASS_REQUIRE=force. Every prompt (PIN,
+// password, host key, "confirm user presence") then makes ssh start
+// `yking` as its askpass helper. The helper (Main) forwards the prompt over
+// a private unix socket to the running TUI (Broker) and prints the TUI's
+// answer for ssh. The policy (a FIDO2 PIN is asked at most once, never
+// echoed, never sent if too short) lives in the TUI, which also owns and
+// can kill the ssh process.
 package askpass
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
-
-	"golang.org/x/term"
+	"time"
 )
 
-// EnvState names the env var pointing at the one-shot state file. Its
-// presence switches the yking binary into askpass mode.
-const EnvState = "YKING_ASKPASS_STATE"
+// EnvSock names the env var with the broker's socket. Its presence
+// switches the yking binary into askpass-helper mode.
+const EnvSock = "YKING_ASKPASS_SOCK"
 
-// Info is shown in the PIN prompt.
-type Info struct {
-	Label        string `json:"label"`
-	Serial       string `json:"serial"`
-	Retries      int    `json:"retries"`        // -1 unknown
-	MinPINLength int    `json:"min_pin_length"` // 0 unknown
-	Used         bool   `json:"used"`
+// Kind is what ssh wants.
+type Kind string
+
+const (
+	KindAsk     Kind = "ask"     // an answer (PIN, password, passphrase, yes/no)
+	KindConfirm Kind = "confirm" // yes/no, answered by the exit code
+	KindNotify  Kind = "notify"  // a notice ("touch your key"); ssh kills the helper when done
+	// yking's own root apply talks to the TUI too:
+	KindChoice Kind = "choice" // pick one of Options (answer = its Key), optionally before Deadline
+	KindPhase  Kind = "phase"  // a new stage starts (Prompt is its title); answered at once
+)
+
+// Option is one answer of a KindChoice question. Key "enter" means Enter.
+type Option struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
 }
 
-// Session is one guarded ssh-keygen run.
-type Session struct {
-	dir string
-	// Env must be added to ssh-keygen's environment.
-	Env []string
+type request struct {
+	Kind     Kind      `json:"kind"`
+	Prompt   string    `json:"prompt"`
+	Options  []Option  `json:"options,omitempty"`
+	Deadline time.Time `json:"deadline,omitempty"`
 }
 
-// Prepare creates the state for one guarded run. self is the yking binary.
-func Prepare(self string, info Info) (*Session, error) {
-	base := os.Getenv("XDG_RUNTIME_DIR")
-	dir, err := os.MkdirTemp(base, "yking-askpass-")
-	if err != nil {
-		return nil, err
-	}
-	state := filepath.Join(dir, "state.json")
-	if err := writeState(state, info); err != nil {
-		os.RemoveAll(dir)
-		return nil, err
-	}
-	return &Session{dir: dir, Env: []string{
-		"SSH_ASKPASS=" + self,
-		"SSH_ASKPASS_REQUIRE=force",
-		EnvState + "=" + state,
-	}}, nil
+type reply struct {
+	OK     bool   `json:"ok"`
+	Answer string `json:"answer,omitempty"`
 }
 
-// PINWasRequested reports whether ssh-keygen asked for the PIN.
-func (s *Session) PINWasRequested() bool {
-	i, err := readState(filepath.Join(s.dir, "state.json"))
-	return err == nil && i.Used
-}
-
-// Close removes the state.
-func (s *Session) Close() { os.RemoveAll(s.dir) }
-
-// Deps are swappable for tests.
-type Deps struct {
-	Tty        io.ReadWriter // terminal for prompt and messages
-	ReadSecret func() (string, error)
-	KillParent func() error
-	PromptKind string // $SSH_ASKPASS_PROMPT
-	StatePath  string
-	Stdout     io.Writer
-}
-
-// Main is the askpass entry point (argv[1] is ssh's prompt). Returns the
-// process exit code.
+// Main is the helper entry point (argv[1] is ssh's prompt). Returns the
+// exit code for ssh: 0 with the answer on stdout, 1 to refuse.
 func Main(args []string) int {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		killParent()
-		return 1
-	}
-	defer tty.Close()
-	d := Deps{
-		Tty:        tty,
-		ReadSecret: func() (string, error) { b, err := term.ReadPassword(int(tty.Fd())); return string(b), err },
-		KillParent: killParent,
-		PromptKind: os.Getenv("SSH_ASKPASS_PROMPT"),
-		StatePath:  os.Getenv(EnvState),
-		Stdout:     os.Stdout,
-	}
 	prompt := ""
 	if len(args) > 0 {
 		prompt = args[0]
 	}
-	return Run(prompt, d)
-}
-
-// Run implements the one-shot policy.
-func Run(prompt string, d Deps) int {
-	abort := func(msg string) int {
-		fmt.Fprintf(d.Tty, "\r\nyking: %s\r\n", msg)
-		d.KillParent()
+	kind := KindAsk
+	switch os.Getenv("SSH_ASKPASS_PROMPT") {
+	case "none":
+		kind = KindNotify
+	case "confirm":
+		kind = KindConfirm
+	}
+	answer, ok, err := Ask(os.Getenv(EnvSock), kind, prompt)
+	if err != nil || !ok {
 		return 1
 	}
-
-	if d.PromptKind == "none" { // notification only ("touch your key")
-		fmt.Fprintf(d.Tty, "\r\n%s\r\n", strings.TrimSpace(prompt))
-		return 0
+	if kind == KindAsk {
+		fmt.Println(answer)
 	}
-	if d.PromptKind == "confirm" {
-		return abort("unexpected confirmation request; stopping")
-	}
-	if !strings.Contains(strings.ToLower(prompt), "pin") {
-		return abort(fmt.Sprintf("unexpected prompt %q; stopping", prompt))
-	}
-
-	info, err := readState(d.StatePath)
-	if err != nil {
-		return abort("askpass state missing; stopping (" + err.Error() + ")")
-	}
-	if info.Used {
-		return abort("the PIN was not accepted. Stopped so no further attempts are used.\r\n" +
-			"       Check `yking detect` for the remaining tries before trying again.")
-	}
-	// Mark used BEFORE prompting: even if anything below fails, a second
-	// request can never be answered.
-	info.Used = true
-	if err := writeState(d.StatePath, info); err != nil {
-		return abort("cannot record PIN request; stopping")
-	}
-
-	tries := "unknown"
-	if info.Retries >= 0 {
-		tries = fmt.Sprint(info.Retries)
-	}
-	fmt.Fprintf(d.Tty, "\r\nFIDO2 PIN for key %q (%s) — %s tries left.\r\n", info.Label, info.Serial, tries)
-	fmt.Fprintf(d.Tty, "Asked ONCE; a wrong PIN stops here without retrying.\r\nPIN: ")
-	pin, err := d.ReadSecret()
-	fmt.Fprint(d.Tty, "\r\n")
-	if err != nil {
-		return abort("could not read PIN; stopping")
-	}
-	minLen := max(info.MinPINLength, 4)
-	if len([]rune(pin)) < minLen {
-		return abort(fmt.Sprintf("PIN shorter than %d characters; not sent (no attempt used)", minLen))
-	}
-	fmt.Fprintln(d.Stdout, pin)
 	return 0
 }
 
-func killParent() error {
-	ppid := os.Getppid()
-	comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", ppid))
-	if err != nil {
-		return err
+// Ask sends one prompt to the broker and waits for its answer. A notice
+// waits until the broker or ssh ends it and always succeeds.
+func Ask(sock string, kind Kind, prompt string) (string, bool, error) {
+	return send(sock, request{Kind: kind, Prompt: prompt})
+}
+
+// Choose asks the TUI to pick one of options. With a deadline, it gives up
+// then (os.ErrDeadlineExceeded). Any error means there was no answer.
+func Choose(sock, prompt string, options []Option, deadline time.Time) (string, error) {
+	a, ok, err := send(sock, request{Kind: KindChoice, Prompt: prompt, Options: options, Deadline: deadline})
+	if err == nil && !ok {
+		err = errors.New("refused")
 	}
-	// Only ever kill the OpenSSH tool that asked us; never anything else.
-	switch strings.TrimSpace(string(comm)) {
-	case "ssh-keygen", "ssh":
+	return a, err
+}
+
+// Phase tells the TUI that a new stage starts.
+func Phase(sock, title string) error {
+	_, _, err := send(sock, request{Kind: KindPhase, Prompt: title})
+	return err
+}
+
+func send(sock string, q request) (string, bool, error) {
+	kind := q.Kind
+	if sock == "" {
+		return "", false, errors.New("no broker socket")
+	}
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		if kind == KindNotify {
+			return "", true, nil // nowhere to show it: not a reason to stop ssh
+		}
+		return "", false, err
+	}
+	defer c.Close()
+	if !q.Deadline.IsZero() {
+		c.SetDeadline(q.Deadline)
+	}
+	if err := json.NewEncoder(c).Encode(q); err != nil {
+		return "", kind == KindNotify, err
+	}
+	var r reply
+	if err := json.NewDecoder(c).Decode(&r); err != nil {
+		if kind == KindNotify {
+			return "", true, nil
+		}
+		return "", false, err
+	}
+	return r.Answer, r.OK, nil
+}
+
+// Request is one prompt waiting in the TUI. Answer or Refuse it exactly
+// once (later calls are ignored). Gone is closed when the helper hung up:
+// ssh ended a notice, or gave up on the question.
+type Request struct {
+	Kind     Kind
+	Prompt   string
+	Options  []Option  // KindChoice
+	Deadline time.Time // KindChoice; zero = none
+	Gone     <-chan struct{}
+
+	conn net.Conn
+	once sync.Once
+}
+
+// Answer sends text to ssh.
+func (r *Request) Answer(text string) { r.send(reply{OK: true, Answer: text}) }
+
+// Refuse makes the helper fail: ssh treats it as cancelled.
+func (r *Request) Refuse() { r.send(reply{OK: false}) }
+
+func (r *Request) send(rep reply) {
+	r.once.Do(func() {
+		json.NewEncoder(r.conn).Encode(rep)
+		r.conn.Close()
+	})
+}
+
+// Broker receives prompts from helpers started by one ssh run.
+type Broker struct {
+	dir  string
+	sock string
+	ln   *net.UnixListener
+	reqs chan *Request
+	done chan struct{}
+
+	mu    sync.Mutex
+	conns map[net.Conn]bool
+}
+
+// NewBroker listens on a socket in a fresh 0700 directory under
+// $XDG_RUNTIME_DIR. Only processes of the same user may connect.
+func NewBroker() (*Broker, error) {
+	dir, err := os.MkdirTemp(os.Getenv("XDG_RUNTIME_DIR"), "yking-askpass-")
+	if err != nil {
+		return nil, err
+	}
+	sock := filepath.Join(dir, "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	b := &Broker{dir: dir, sock: sock, ln: ln, reqs: make(chan *Request, 8), done: make(chan struct{}), conns: map[net.Conn]bool{}}
+	go b.accept()
+	return b, nil
+}
+
+// Env makes ssh/ssh-keygen (and `sudo -A`) use self (the yking binary) as
+// askpass for every prompt and notice.
+func (b *Broker) Env(self string) []string {
+	return []string{"SSH_ASKPASS=" + self, "SSH_ASKPASS_REQUIRE=force", "SUDO_ASKPASS=" + self, EnvSock + "=" + b.sock}
+}
+
+// Sock is the socket path (passed to yking's root apply as --tui).
+func (b *Broker) Sock() string { return b.sock }
+
+// Requests delivers prompts in arrival order.
+func (b *Broker) Requests() <-chan *Request { return b.reqs }
+
+// Done is closed by Close.
+func (b *Broker) Done() <-chan struct{} { return b.done }
+
+// Close stops listening, hangs up on every helper and removes the socket.
+func (b *Broker) Close() {
+	select {
+	case <-b.done:
+		return
 	default:
-		return errors.New("parent is not ssh-keygen/ssh; not killing")
 	}
-	return syscall.Kill(ppid, syscall.SIGKILL)
+	close(b.done)
+	b.ln.Close()
+	b.mu.Lock()
+	for c := range b.conns {
+		c.Close()
+	}
+	b.mu.Unlock()
+	os.RemoveAll(b.dir)
 }
 
-func readState(path string) (Info, error) {
-	var i Info
-	if path == "" {
-		return i, errors.New("no state path")
+func (b *Broker) accept() {
+	for {
+		c, err := b.ln.AcceptUnix()
+		if err != nil {
+			return
+		}
+		go b.serve(c)
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return i, err
-	}
-	return i, json.Unmarshal(b, &i)
 }
 
-func writeState(path string, i Info) error {
-	b, err := json.Marshal(i)
+func (b *Broker) serve(c *net.UnixConn) {
+	if !sameUser(c) {
+		c.Close()
+		return
+	}
+	b.mu.Lock()
+	select {
+	case <-b.done:
+		b.mu.Unlock()
+		c.Close()
+		return
+	default:
+	}
+	b.conns[c] = true
+	b.mu.Unlock()
+
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	dec := json.NewDecoder(c)
+	var q request
+	if err := dec.Decode(&q); err != nil || !validKind(q.Kind) {
+		c.Close()
+		return
+	}
+	c.SetReadDeadline(time.Time{})
+	gone := make(chan struct{})
+	r := &Request{Kind: q.Kind, Prompt: strings.TrimSpace(q.Prompt), Options: q.Options, Deadline: q.Deadline, Gone: gone, conn: c}
+	go func() { // the helper never sends more; any read result means it hung up
+		var x [1]byte
+		c.Read(x[:])
+		close(gone)
+		b.mu.Lock()
+		delete(b.conns, c)
+		b.mu.Unlock()
+	}()
+	select {
+	case b.reqs <- r:
+	case <-b.done:
+		c.Close()
+	}
+}
+
+func validKind(k Kind) bool {
+	switch k {
+	case KindAsk, KindConfirm, KindNotify, KindChoice, KindPhase:
+		return true
+	}
+	return false
+}
+
+// sameUser checks the peer's uid (SO_PEERCRED): this user, or root (yking's
+// own elevated apply; root could read the socket directory anyway).
+func sameUser(c *net.UnixConn) bool {
+	raw, err := c.SyscallConn()
 	if err != nil {
-		return err
+		return false
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	ok := false
+	raw.Control(func(fd uintptr) {
+		cred, err := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+		ok = err == nil && (int(cred.Uid) == os.Getuid() || cred.Uid == 0)
+	})
+	return ok
 }

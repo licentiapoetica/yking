@@ -144,7 +144,7 @@ func (m model) updateLUKS(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s luksScreen) view() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Disk encryption (LUKS)") + "\n")
-	b.WriteString(dimStyle.Render("The passphrase slot always stays. Keys are added as extra slots; nothing is stored on the key.") + "\n\n")
+	b.WriteString("\n")
 
 	if s.pending != "" {
 		b.WriteString(errStyle.Render("! A boot change ("+s.pending+") was interrupted before it was rebuilt and verified.\n  Press R to repair BEFORE rebooting.") + "\n\n")
@@ -186,7 +186,7 @@ func (s luksScreen) view() string {
 		}
 	}
 	if n := s.enrolledCount(); n == 1 {
-		b.WriteString(warnStyle.Render("  ! only one key enrolled — enroll a second one (the passphrase still works either way)") + "\n")
+		b.WriteString(warnStyle.Render("  ! only one key enrolled — add a second") + "\n")
 	}
 	for _, v := range s.vols {
 		if v.Root {
@@ -203,12 +203,12 @@ func (s luksScreen) view() string {
 	if s.touch {
 		unlock = "◂ touch only ▸"
 	}
-	b.WriteString("\n" + selStyle.Render("e") + " enroll the plugged-in key   unlock at boot: " + unlock + dimStyle.Render("  (PIN only is impossible: the YubiKey insists on a touch)") + "\n")
+	b.WriteString("\n" + selStyle.Render("e") + " enroll the plugged-in key   unlock at boot: " + unlock + "\n")
 	if s.boot.Method == "encrypt" {
-		b.WriteString(selStyle.Render("m") + " switch boot to FIDO2 unlocking (keeps a fallback GRUB entry with the old way)\n")
+		b.WriteString(selStyle.Render("m") + " switch boot to FIDO2 unlock (keeps a fallback entry)\n")
 	}
-	b.WriteString(selStyle.Render("s") + " full status incl. keyslots (sudo)   " + selStyle.Render("R") + " repair boot images\n")
-	b.WriteString(dimStyle.Render("\nAt boot: enter the PIN, then touch the blinking key. If it fails with the key plugged in,\nunplug it and reboot (passphrase after ~30 s) or pick \"yking fallback\" in GRUB.") + "\n")
+	b.WriteString(selStyle.Render("s") + " full status   " + selStyle.Render("R") + " repair boot images\n")
+	b.WriteString(dimStyle.Render("\nboot fails? unplug the key → passphrase, or GRUB \"yking fallback\"") + "\n")
 	if s.err != "" {
 		b.WriteString("\n" + errStyle.Render(s.err) + "\n")
 	}

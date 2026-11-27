@@ -4,7 +4,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/keyring"
-	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 	"github.com/licentiapoetica/yking/internal/ykman"
 )
@@ -53,6 +51,8 @@ const (
 	modeDoctor
 	modeLUKS
 	modeImport
+	modeHosts
+	modeRun
 )
 
 type scanDoneMsg struct {
@@ -60,6 +60,7 @@ type scanDoneMsg struct {
 	kr       *keyring.Keyring
 	sshKeys  []sshkey.PubKey
 	coverage map[string]bool
+	stale    string // /usr/local/bin/yking differs from this build: both times
 	err      error
 }
 
@@ -88,10 +89,19 @@ type model struct {
 	doctor     doctorScreen
 	luks       luksScreen
 	imp        importScreen
+	hosts      hostsScreen
+	run        runner
 	// pendingArchive: revoked key files to move once the plan applied.
 	pendingArchive []string
 	coverage       map[string]bool // serial → PAM credential confirmed
 	sshKeys        []sshkey.PubKey // security-key pubkeys in ~/.ssh
+	stale          string          // installed yking differs from this build: both times
+
+	// loading screen
+	scanCh  <-chan tea.Msg    // the scan whose steps scanLog shows
+	scanLog []detect.Progress // steps of the running scan
+	frame   int               // animation frame
+	ticking bool              // the frame clock is running
 }
 
 // Run starts the TUI.
@@ -102,19 +112,6 @@ func Run(cfg Config) error {
 
 func (m model) Init() tea.Cmd { return m.scan() }
 
-func (m model) scan() tea.Cmd {
-	return func() tea.Msg {
-		kr, err := keyring.Load(m.cfg.KeyringPath)
-		if err != nil {
-			return scanDoneMsg{err: err}
-		}
-		rep, err := detect.Scan(context.Background(), m.cfg.Client, kr)
-		sk, _ := sshkey.ScanSK(sshDir())
-		mp, _, _ := readMapping()
-		return scanDoneMsg{rep: rep, kr: kr, sshKeys: sk, coverage: pam.Coverage(kr, mp, currentUser()), err: err}
-	}
-}
-
 func (m model) selected() (detect.KeyReport, bool) {
 	if m.rep == nil || m.cursor >= len(m.rep.Keys) {
 		return detect.KeyReport{}, false
@@ -123,13 +120,23 @@ func (m model) selected() (detect.KeyReport, bool) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	return next.(model).keepAnimating(cmd)
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case animTickMsg:
+		return m.onTick()
+	case scanProgressMsg:
+		return m.onProgress(msg)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case scanDoneMsg:
 		m.scanning = false
 		m.rep, m.kr, m.sshKeys, m.coverage, m.err = msg.rep, msg.kr, msg.sshKeys, msg.coverage, msg.err
+		m.stale = msg.stale
 		if m.rep != nil && m.cursor >= len(m.rep.Keys) {
 			m.cursor = 0
 		}
@@ -176,6 +183,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.scan()
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if m.mode == modeRun && m.run.job.noCancel && m.run.phase == phaseRunning {
+				// Never walk away from a running apply (e.g. a PAM change
+				// waiting for "keep"): quitting would roll it back at best.
+				if m.run.prompt != nil {
+					m.run.prompt.Refuse()
+					m.run.prompt = nil
+				}
+				m.run.note = "Ctrl+C: the open question was answered with no (cancel / roll back). The apply finishes by itself; quit after that."
+				return m, nil
+			}
+			if m.mode == modeRun {
+				m.run.stop(errCancelled) // never leave a detached ssh behind
+			}
 			return m, tea.Quit
 		}
 	}
@@ -205,6 +225,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLUKS(msg)
 	case modeImport:
 		return m.updateImport(msg)
+	case modeHosts:
+		return m.updateHosts(msg)
+	case modeRun:
+		return m.updateRun(msg)
 	default:
 		return m.updateKeys(msg)
 	}
@@ -249,7 +273,7 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.scanning || !ok:
 		case k.Known == nil:
-			m.status = warnStyle.Render("Register this key first (e), then create an SSH key for it.")
+			m.status = warnStyle.Render("Register this key first (e).")
 		default:
 			m.ssh = newSSHForm(k)
 			m.mode = modeSSH
@@ -268,9 +292,18 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 			return m, m.u2fCheck(k.Serial)
 		}
+	case "U":
+		if m.stale != "" {
+			return m.updateInstalled()
+		}
 	case "i":
 		m.imp = newImportScreen(m.cfg.KeyringPath)
 		m.mode = modeImport
+		m.status = ""
+		return m, nil
+	case "o":
+		m.hosts = newHostsScreen(m.cfg.KeyringPath)
+		m.mode = modeHosts
 		m.status = ""
 		return m, nil
 	case "b":
@@ -338,9 +371,13 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.scanning || !ok:
 		case k.Known == nil || len(k.Known.SSH) == 0:
-			m.status = warnStyle.Render("This key has no SSH key yet; press s to create one first.")
+			m.status = warnStyle.Render("No SSH key yet (s).")
 		default:
-			m.deploy = newDeployForm(k)
+			var keys []keyring.Key
+			if m.kr != nil {
+				keys = m.kr.Keys
+			}
+			m.deploy = newDeployForm(k, keys, connectedSerials(m))
 			m.mode = modeDeploy
 			m.status = ""
 			return m, textinput.Blink
@@ -357,59 +394,72 @@ func (m model) View() string {
 	switch m.mode {
 	case modeEnroll:
 		b.WriteString(m.enroll.view())
-		help = "tab/↑/↓ field · ←/→ role · space toggle · enter review plan · esc cancel"
+		help = "tab field · ←→ role · space toggle · enter review · esc cancel"
 	case modeReview:
 		b.WriteString(m.review.view(m.height))
-		help = "↑/↓/pgup/pgdn scroll · a apply (asks for sudo) · esc back"
+		help = "↑↓ scroll · a apply · esc back"
+	case modeRun:
+		b.WriteString(m.viewRun())
+		help = m.runHelp()
+	case modeHosts:
+		b.WriteString(m.hosts.view())
+		help = "↑↓ host · enter review · r reload · esc back"
 	case modeImport:
 		b.WriteString(m.imp.view())
-		help = "1 keys + SSH files · p PAM · u plug/unplug · b disk · D done · esc back"
+		help = "1 keys · p PAM · u plug actions · b disk · D done · esc back"
 	case modeLUKS:
 		b.WriteString(m.luks.view())
-		help = "e enroll · ←/→ unlock mode · m switch boot · s status · R repair · esc back"
+		help = "e enroll · ←→ unlock · m switch boot · s status · R repair · esc back"
 	case modeDoctor:
 		b.WriteString(m.doctor.view(m.height))
-		help = "↑/↓ scroll · r check again · esc back"
+		help = "↑↓ scroll · r recheck · esc back"
 	case modeEvents:
 		b.WriteString(m.events.view())
-		help = "↑/↓ item · space tick/untick · enter review plan · esc back"
+		help = "↑↓ item · space toggle · enter review · esc back"
 	case modeLink:
 		b.WriteString(m.link.view())
-		help = "↑/↓ SSH key · tab hosts field · enter test & link · esc back"
+		help = "↑↓ key · tab hosts · enter test · esc back"
 	case modeRevoke:
 		b.WriteString(m.revoke.view())
-		help = "↑/↓ choose · enter continue · esc back"
+		help = "↑↓ choose · enter next · esc back"
 		if m.revoke.a != nil {
-			help = "↑/↓ item · space tick/untick · ←/→ server login · type the label · enter run · esc back"
+			help = "↑↓ item · space toggle · ←→ login · enter run · esc back"
 		}
 	case modeU2F:
 		b.WriteString(m.u2f.view())
-		help = "enter record · a add credential · r check again · esc back"
+		help = "enter record · a add · r recheck · esc back"
 	case modePAM:
 		b.WriteString(m.pam.view())
-		help = "↑/↓ service · ←/→ mode · u PIN/touch · t take-over on/off · r reset · enter review · esc back"
+		help = "↑↓ service · ←→ mode · u PIN/touch · t take-over · r reset · enter review · esc back"
 	case modeDeploy:
 		b.WriteString(m.deploy.view())
-		help = "tab/↑/↓ field · ←/→ choose · enter deploy · esc cancel"
+		help = "tab field · ←→ choose · enter deploy · esc cancel"
 	case modeSSH:
 		b.WriteString(m.ssh.view())
-		help = "tab/↑/↓ field · ←/→ choose · enter create key · esc cancel"
+		help = "tab field · ←→ choose · enter create · esc cancel"
 	default:
 		switch {
 		case m.scanning:
-			b.WriteString("Scanning connected keys (read-only)…\n")
+			b.WriteString(m.viewLoading())
 		case m.err != nil:
 			b.WriteString(errStyle.Render("Error: "+m.err.Error()) + "\n")
 		default:
+			if m.stale != "" {
+				b.WriteString(warnStyle.Render("! installed yking is outdated ("+m.stale+") — U to update") + "\n\n")
+			}
 			b.WriteString(m.viewKeys())
 		}
-		help = "↑/↓ select · e enroll · t test · c check PAM · s SSH key · l link · d deploy · p PAM · b disk (LUKS) · u plug/unplug · x revoke · i import · h doctor · r rescan · q quit"
+		if m.scanning {
+			help = "q quit"
+			break
+		}
+		help = "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
 	}
 
 	if m.status != "" {
 		b.WriteString("\n" + m.status + "\n")
 	}
-	b.WriteString("\n" + dimStyle.Render(help+" · nothing is ever written to a key"))
+	b.WriteString("\n" + renderHelp(help, m.width))
 	return b.String()
 }
 
@@ -441,7 +491,7 @@ func (m model) viewKeys() string {
 		for _, p := range un {
 			list.WriteString(dimStyle.Render("  ~/.ssh/"+filepath.Base(p.Path)+"  "+p.Comment) + "\n")
 		}
-		list.WriteString(dimStyle.Render("  (made outside yking: select the key it is on, press l)") + "\n")
+		list.WriteString(dimStyle.Render("  l on its key to link") + "\n")
 	}
 	if m.kr != nil {
 		for _, r := range m.kr.Revoked {
@@ -454,7 +504,7 @@ func (m model) viewKeys() string {
 		list.WriteString("\n" + warnStyle.Render("  ? "+d+" — no serial, cannot be tracked") + "\n")
 	}
 	if m.kr != nil && len(m.kr.Keys) > 0 && !m.kr.MeetsMinimumKeys() {
-		list.WriteString("\n" + warnStyle.Render("Only 1 key registered. Lock-out-capable features need ≥2.") + "\n")
+		list.WriteString("\n" + warnStyle.Render("! only 1 key registered — add a backup") + "\n")
 	}
 
 	left := paneStyle.Render(strings.TrimRight(list.String(), "\n"))
@@ -489,7 +539,7 @@ func detail(k detect.KeyReport, coverage map[string]bool) string {
 	if k.Known != nil {
 		prot := "no"
 		if k.Known.Protected {
-			prot = "yes (type label to confirm writes)"
+			prot = "yes"
 		}
 		row("Label", k.Known.Label)
 		row("Role", string(k.Known.Role))
@@ -533,10 +583,10 @@ func detail(k detect.KeyReport, coverage map[string]bool) string {
 		if coverage[k.Serial] {
 			row("PAM", okStyle.Render("✓ credential confirmed"))
 		} else {
-			row("PAM", warnStyle.Render("not confirmed — press c"))
+			row("PAM", warnStyle.Render("not confirmed (c)"))
 		}
 		if len(k.Known.SSH) == 0 {
-			row("SSH keys", dimStyle.Render("none — press s to create one"))
+			row("SSH keys", dimStyle.Render("none (s)"))
 		}
 		for i, s := range k.Known.SSH {
 			label := ""
@@ -562,7 +612,7 @@ func detail(k detect.KeyReport, coverage map[string]bool) string {
 			}
 		}
 	} else {
-		b.WriteString("\n" + selStyle.Render("Press e to register this key") + "\n")
+		b.WriteString("\n" + selStyle.Render("e to register") + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

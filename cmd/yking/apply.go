@@ -17,11 +17,12 @@ import (
 	"github.com/licentiapoetica/yking/internal/targets"
 )
 
-// cmdApply: yking apply [--yes] [--pause-on-error] PLAN.json
+// cmdApply: yking apply [--yes] [--pause-on-error] [--tui SOCK] PLAN.json
 func cmdApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	yes := fs.Bool("yes", false, "do not ask for confirmation (the diff was already reviewed)")
-	pause := fs.Bool("pause-on-error", false, "wait for Enter after an error (used by the TUI)")
+	pause := fs.Bool("pause-on-error", false, "wait for Enter after an error (terminal use)")
+	tui := fs.String("tui", "", "started by the TUI: ask questions over this askpass socket, never read a terminal")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: yking apply [--yes] PLAN.json")
@@ -39,10 +40,19 @@ func cmdApply(args []string) error {
 		if *pause {
 			fwd = append(fwd, "--pause-on-error")
 		}
+		if *tui != "" {
+			fwd = append(fwd, "--tui", *tui)
+		}
 		return elevate.Reexec(append(fwd, path)...)
 	}
 
-	err = applyAsRoot(path, *yes)
+	if *tui != "" {
+		// The TUI reads our output through a pipe. If yking is closed
+		// meanwhile, a write must not kill a half-done apply (SIGPIPE).
+		signal.Ignore(syscall.SIGPIPE)
+		return applyAsRoot(path, true, *tui)
+	}
+	err = applyAsRoot(path, *yes, "")
 	if err != nil && *pause {
 		fmt.Fprintln(os.Stderr, "yking: apply failed:", err)
 		fmt.Fprint(os.Stderr, "Press Enter to return to yking… ")
@@ -51,7 +61,9 @@ func cmdApply(args []string) error {
 	return err
 }
 
-func applyAsRoot(path string, yes bool) error {
+// applyAsRoot applies the plan. tuiSock != "": started by the TUI (the
+// dead-man switch asks there).
+func applyAsRoot(path string, yes bool, tuiSock string) error {
 	p, err := plan.Load(path)
 	if err != nil {
 		return err
@@ -93,7 +105,11 @@ func applyAsRoot(path string, yes bool) error {
 	}
 	if targets.TouchesPAM(p) {
 		// Lockout-critical: keep only if the user confirms it works.
-		if err := deadman(a, m, os.Stdin, os.Stdout); err != nil {
+		dm := func() error { return deadman(a, m, os.Stdin, os.Stdout) }
+		if tuiSock != "" {
+			dm = func() error { return deadmanTUI(a, m, tuiSock) }
+		}
+		if err := dm(); err != nil {
 			return err
 		}
 	}
@@ -161,7 +177,7 @@ func cmdRollback(args []string) error {
 	fs := flag.NewFlagSet("rollback", flag.ExitOnError)
 	force := fs.Bool("force", false, "restore even if files changed after yking wrote them")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
-	userFiles := fs.Bool("user", false, "roll back a change to your own files (e.g. ~/.config/Yubico/u2f_keys); no root")
+	userFiles := fs.Bool("user", false, "roll back a change to your own files (e.g. ~/.config/Yubico/u2f_keys, ~/.ssh/config); no root")
 	fs.Parse(args)
 	if fs.NArg() > 1 {
 		return fmt.Errorf("usage: yking rollback [--user] [--force] [ID]")

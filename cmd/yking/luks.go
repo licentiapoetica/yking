@@ -311,7 +311,7 @@ func luksMigrate(dryRun bool) error {
 	fmt.Println("After applying, yking rebuilds the initramfs images and the GRUB menu and checks them;")
 	fmt.Println("if anything is wrong it restores the old files and rebuilds again.")
 	fmt.Println()
-	if err := applyAsRoot(path, false); err != nil {
+	if err := applyAsRoot(path, false, ""); err != nil {
 		return err
 	}
 	fmt.Println()

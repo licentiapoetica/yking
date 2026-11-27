@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 	"github.com/licentiapoetica/yking/internal/transfer"
 	"github.com/licentiapoetica/yking/internal/ykman"
@@ -186,7 +188,7 @@ func TestDeployNeedsSSHKey(t *testing.T) {
 	kr := keyring.New()
 	k, _ := kr.Add("1", "x", keyring.RoleDaily, t0())
 	m := send(t, model{}, scanDoneMsg{rep: &detect.Report{Keys: []detect.KeyReport{{Serial: "1", Known: k}}}, kr: kr}, keyMsg("d"))
-	if m.mode != modeKeys || !strings.Contains(m.status, "no SSH key") {
+	if m.mode != modeKeys || !strings.Contains(m.status, "No SSH key") {
 		t.Errorf("mode=%v status=%q", m.mode, m.status)
 	}
 }
@@ -309,7 +311,7 @@ func TestU2FMatchRecords(t *testing.T) {
 func TestU2FMissingAddsBothPlans(t *testing.T) {
 	m, mp := u2fModel(t)
 	m = send(t, m, u2fCheckMsg{res: &u2fResult{user: currentUser(), total: 2}})
-	if v := m.View(); !strings.Contains(v, "None of your 2") || !strings.Contains(v, "Press a to add") {
+	if v := m.View(); !strings.Contains(v, "None of your 2") || !strings.Contains(v, "a to add") {
 		t.Fatalf("view:\n%s", v)
 	}
 	// Simulate pamu2fcfg finished and the new credential verified on the key.
@@ -409,19 +411,22 @@ func TestRevokeFlow(t *testing.T) {
 	}
 	m.revoke.confirm.SetValue("daily")
 
-	// Enter starts the first host (returns an exec command).
+	// Enter starts the first host on the run screen (nothing is executed
+	// here: the start command is not run).
 	m2, cmd := m.Update(keyMsg("enter"))
 	m = m2.(model)
-	if cmd == nil || m.revoke.busy == "" || len(m.revoke.queue) != 1 {
-		t.Fatalf("first host not started: busy=%q queue=%v err=%q", m.revoke.busy, m.revoke.queue, m.revoke.err)
+	if cmd == nil || m.mode != modeRun || m.revoke.busy == "" || len(m.revoke.queue) != 1 || !strings.Contains(m.View(), "from a@one") {
+		t.Fatalf("first host not started: mode=%v busy=%q queue=%v err=%q", m.mode, m.revoke.busy, m.revoke.queue, m.revoke.err)
 	}
 	// Host 0 cleaned, host 1 refused (last key there).
-	m2, cmd = m.Update(revokeHostDoneMsg{host: 0, out: []byte("yking-result:removed /home/a/.ssh/authorized_keys.yking-bak-1\n")})
+	m2, cmd = m.finish(runResult{stdout: []byte("yking-result:removed /home/a/.ssh/authorized_keys.yking-bak-1\n")})
+	m2, cmd = m2.(model).Update(cmd())
 	m = m2.(model)
-	if cmd == nil {
+	if cmd == nil || m.mode != modeRun || !strings.Contains(m.View(), "from b@two") {
 		t.Fatal("second host not started")
 	}
-	m = send(t, m, revokeHostDoneMsg{host: 1, out: []byte("yking-result:last\n")})
+	m2, cmd = m.finish(runResult{stdout: []byte("yking-result:last\n")})
+	m = send(t, m2, cmd())
 	if m.mode != modeReview || m.review.userPlan == nil || m.review.plan == nil {
 		t.Fatalf("mode=%v err=%q", m.mode, m.revoke.err)
 	}
@@ -602,7 +607,7 @@ func TestLUKSScreen(t *testing.T) {
 
 	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
 	v := m.View()
-	for _, want := range []string{"/dev/nvme0n1p2 · LUKS2 · cryptroot → LVM", "IGNORED at boot", "daily", "not enrolled", "LUKS1: FIDO2 needs LUKS2", "PIN only is impossible"} {
+	for _, want := range []string{"/dev/nvme0n1p2 · LUKS2 · cryptroot → LVM", "IGNORED at boot", "daily", "not enrolled", "LUKS1: FIDO2 needs LUKS2"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q:\n%s", want, v)
 		}
@@ -662,5 +667,278 @@ func TestImportChecklist(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(home, ".ssh", "yk-main-02")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("ssh handle not written privately: %v %v", fi, err)
+	}
+}
+
+// Ticking "SSH config" puts the Host block (user file) and the keyring
+// record (system file) into the same review; nothing is written yet.
+func TestDeployWithSSHConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	m, priv := deployModel(t)
+	os.WriteFile(priv, []byte("handle"), 0o600)
+	m = send(t, m, keyMsg("d"))
+	if strings.Contains(m.View(), "[x] yes — then review a Host block") {
+		t.Fatal("SSH config must be off by default")
+	}
+	m = send(t, m, keyMsg("tab"), keyMsg("tab"), keyMsg("tab"), keyMsg("tab"), keyMsg(" "))
+	if !m.deploy.config {
+		t.Fatal("config toggle did not switch on")
+	}
+	s := m.deploy.selected()
+	m = send(t, m, deployDoneMsg{target: "alice@host2.example", ssh: s, out: []byte("yking-result:added\n"), config: true})
+	if m.mode != modeReview || m.review.userPlan == nil || m.review.plan == nil {
+		t.Fatalf("mode=%v user=%v root=%v err=%q", m.mode, m.review.userPlan != nil, m.review.plan != nil, m.deploy.err)
+	}
+	v := m.View()
+	for _, want := range []string{"+Host host2.example", "+    User alice", "+    IdentityFile " + priv, `+hosts = ["alice@host2.example"]`, "ssh alice@host2.example (after applying)"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("review lacks %q:\n%s", want, v)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ssh", "config")); err == nil {
+		t.Error("config written before apply")
+	}
+}
+
+func TestDeployConfigSkippedWhenTestFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m, priv := deployModel(t)
+	os.WriteFile(priv, []byte("handle"), 0o600)
+	m = send(t, m, keyMsg("d"))
+	m.deploy.config = true
+	s := m.deploy.selected()
+	m = send(t, m, testDoneMsg{target: "host2.example", ssh: s, result: sshkey.DeployAdded, err: errors.New("exit status 255"), config: true})
+	if m.mode != modeReview || m.review.userPlan != nil || !strings.Contains(m.status, "~/.ssh/config not changed") {
+		t.Errorf("mode=%v user=%v status=%q", m.mode, m.review.userPlan != nil, m.status)
+	}
+}
+
+// The hosts screen writes one host's block, in-process, with a backup.
+func TestHostsScreenWritesBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	krPath := filepath.Join(dir, "keyring.toml")
+	kr := keyring.New()
+	k1, k2 := filepath.Join(home, ".ssh", "yk-main-01"), filepath.Join(home, ".ssh", "yk-main-02")
+	os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
+	os.WriteFile(k1, []byte("h"), 0o600)
+	os.WriteFile(k2, []byte("h"), 0o600)
+	// Fill each key before the next Add: Add may move the slice.
+	day, _ := kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	day.SSH = []keyring.SSHKey{{Fingerprint: "SHA256:a", Path: k1, Comment: "yk-main-01", VerifyRequired: true, Hosts: []string{"alice@host1.example"}}}
+	bak, _ := kr.Add("22222222", "home-backup", keyring.RoleHomeBackup, t0())
+	bak.SSH = []keyring.SSHKey{{Fingerprint: "SHA256:b", Path: k2, Comment: "yk-main-02", VerifyRequired: true}}
+	kr.Save(krPath)
+	cfg := filepath.Join(home, ".ssh", "config")
+	os.WriteFile(cfg, []byte("Host *\n    ServerAliveInterval 30\n"), 0o600)
+
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 160, height: 50}, keyMsg("o"))
+	v := m.View()
+	for _, want := range []string{"host1.example", "yk-main-01 (daily)", "only one YubiKey can log in", "not here: yk-main-02 (home-backup)", "no yking block"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("hosts screen lacks %q:\n%s", want, v)
+		}
+	}
+	m = send(t, m, keyMsg("enter"))
+	if m.mode != modeReview || m.review.plan != nil || m.review.userPlan == nil {
+		t.Fatalf("mode=%v err=%q", m.mode, m.hosts.err)
+	}
+	m = send(t, m, keyMsg("a"))
+	got, _ := os.ReadFile(cfg)
+	if !strings.HasPrefix(string(got), "# yking-begin host1.example") || !strings.Contains(string(got), "IdentityFile ~/.ssh/yk-main-01") ||
+		!strings.HasSuffix(string(got), "\nHost *\n    ServerAliveInterval 30\n") {
+		t.Errorf("config after apply:\n%s", got)
+	}
+	m = send(t, model{cfg: Config{KeyringPath: krPath}, width: 160, height: 50}, keyMsg("o"))
+	if !strings.Contains(m.View(), "up to date") {
+		t.Errorf("state after apply:\n%s", m.View())
+	}
+	if m = send(t, m, keyMsg("enter")); m.mode != modeHosts || !strings.Contains(m.status, "already has") {
+		t.Errorf("second enter: mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+// Deploying the backup key's SSH key while logging in with the daily key:
+// the key being deployed is not offered for login, and each choice says
+// which YubiKey it needs, whether it is plugged in and on the server.
+func TestDeployLoginHints(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ssh := filepath.Join(home, ".ssh")
+	os.MkdirAll(ssh, 0o700)
+	for _, n := range []string{"id_ed25519", "yk-main-01", "yk-main-02"} {
+		os.WriteFile(filepath.Join(ssh, n), []byte("x"), 0o600)
+		os.WriteFile(filepath.Join(ssh, n+".pub"), []byte(testPub+"\n"), 0o644)
+	}
+	kr := keyring.New()
+	day, _ := kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	day.SSH = []keyring.SSHKey{{Fingerprint: "SHA256:a", Path: filepath.Join(ssh, "yk-main-01"), Comment: "yk-main-01", Hosts: []string{"alice@host1.example"}}}
+	bak, _ := kr.Add("22222222", "home-backup", keyring.RoleHomeBackup, t0())
+	bak.SSH = []keyring.SSHKey{{Fingerprint: "SHA256:b", Path: filepath.Join(ssh, "yk-main-02"), Comment: "yk-main-02"}}
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	if err := kr.Save(krPath); err != nil {
+		t.Fatal(err)
+	}
+	rep := &detect.Report{Keys: []detect.KeyReport{{Serial: "22222222", Known: bak}}} // only the backup is plugged in
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 200, height: 50}, scanDoneMsg{rep: rep, kr: kr}, keyMsg("d"))
+	for _, r := range "alice@host1.example" {
+		m = send(t, m, keyMsg(string(r)))
+	}
+
+	choices := m.deploy.loginChoices()
+	if slices.Contains(choices, filepath.Join(ssh, "yk-main-02")) || len(choices) != 3 {
+		t.Fatalf("choices = %v (must not offer the key being deployed)", choices)
+	}
+	m = send(t, m, keyMsg("tab"), keyMsg("tab"), keyMsg("right")) // Login: id_ed25519
+	if v := m.View(); !strings.Contains(v, "regular key") {
+		t.Errorf("legacy key hint:\n%s", v)
+	}
+	m = send(t, m, keyMsg("right")) // yk-main-01
+	v := m.View()
+	for _, want := range []string{"daily", "not plugged in", "on this server", "swap daily → home-backup"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("yk-main-01 hint lacks %q:\n%s", want, v)
+		}
+	}
+	if o := m.deploy.login().owner; o == nil || o.Serial != "11111111" {
+		t.Errorf("login key owner = %+v", o)
+	}
+	m = send(t, m, keyMsg("right")) // wraps to ssh default
+	if m.deploy.loginPath != "" {
+		t.Errorf("did not wrap: %q", m.deploy.loginPath)
+	}
+
+	m.deploy.target.SetValue("alice@host2.example")
+	m.deploy.loginPath = filepath.Join(ssh, "yk-main-01")
+	if v := m.View(); !strings.Contains(v, "not on this server") {
+		t.Errorf("unknown server not flagged:\n%s", v)
+	}
+
+	// Test skipped because the backup was not plugged back in: recorded, not FAILED.
+	s := m.deploy.selected()
+	m = send(t, m, testDoneMsg{target: "alice@host2.example", ssh: s, result: sshkey.DeployAdded, skipped: true})
+	if m.mode != modeReview || !strings.Contains(m.status, "test skipped (home-backup was not plugged in)") || strings.Contains(m.status, "FAILED") {
+		t.Errorf("mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+// U only works when the installed copy differs, and then reviews a plan
+// that installs exactly one file: /usr/local/bin/yking (nothing else).
+func TestUpdateInstalledPlan(t *testing.T) {
+	m := send(t, model{width: 120, height: 40}, scanDoneMsg{rep: &detect.Report{}, kr: keyring.New()}, keyMsg("U"))
+	if m.mode != modeKeys {
+		t.Fatalf("U without a stale install: mode=%v", m.mode)
+	}
+	m = send(t, model{width: 120, height: 40}, scanDoneMsg{rep: &detect.Report{}, kr: keyring.New(), stale: "Nov 27 02:53, this build Nov 27 02:58"})
+	if v := m.View(); !strings.Contains(v, "U to update") || !strings.Contains(v, "this build Nov 27 02:58") {
+		t.Errorf("no banner:\n%s", m.View())
+	}
+	m = send(t, m, keyMsg("U"))
+	if m.mode != modeReview || m.review.plan == nil || m.review.userPlan != nil {
+		t.Fatalf("mode=%v status=%q", m.mode, m.status)
+	}
+	st := m.review.plan.Steps
+	self, _ := os.Executable()
+	if len(st) != 1 || st[0].Kind != plan.KindInstall || st[0].Path != events.BinaryPath || st[0].Source != self || st[0].Mode != 0o755 {
+		t.Errorf("steps = %+v", st)
+	}
+}
+
+func TestLoadingScreen(t *testing.T) {
+	ch1 := make(chan tea.Msg)
+	m := model{scanning: true, width: 100}
+	m = send(t, m,
+		scanProgressMsg{p: detect.Progress{Step: "list", Text: "looking for YubiKeys on USB"}, ch: ch1},
+		scanProgressMsg{p: detect.Progress{Step: "list", Text: "found 2 YubiKeys", Done: true}, ch: ch1},
+		scanProgressMsg{p: detect.Progress{Step: "key:11111111", Text: "reading daily (11111111)"}, ch: ch1})
+	if len(m.scanLog) != 2 || !m.scanLog[0].Done {
+		t.Fatalf("log = %+v", m.scanLog)
+	}
+	v := m.View()
+	for _, want := range []string{"Scanning your YubiKeys", "✓ found 2 YubiKeys", "reading daily (11111111)", "●", "quit"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("loading view lacks %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "e enroll") {
+		t.Error("key commands shown while scanning")
+	}
+	// A new scan starts a fresh log.
+	m = send(t, m, scanProgressMsg{p: detect.Progress{Step: "keyring", Text: "reading the keyring"}, ch: make(chan tea.Msg)})
+	if len(m.scanLog) != 1 || m.scanLog[0].Step != "keyring" {
+		t.Errorf("log not reset: %+v", m.scanLog)
+	}
+
+	// The frame clock starts once and stops itself after the scan.
+	next, cmd := m.Update(animTickMsg{})
+	m = next.(model)
+	if !m.ticking || cmd == nil || m.frame != 1 {
+		t.Fatalf("ticking=%v frame=%d", m.ticking, m.frame)
+	}
+	m = send(t, m, scanDoneMsg{rep: &detect.Report{}, kr: keyring.New()})
+	next, cmd = m.Update(animTickMsg{})
+	if m = next.(model); m.ticking || cmd != nil {
+		t.Errorf("clock kept running after the scan: ticking=%v", m.ticking)
+	}
+	// Narrow terminals skip the drawing but keep the progress.
+	m = model{scanning: true, width: 40, scanLog: []detect.Progress{{Step: "x", Text: "found 1 YubiKey", Done: true}}}
+	if v := m.View(); strings.Contains(v, "●") || !strings.Contains(v, "found 1 YubiKey") {
+		t.Errorf("narrow view:\n%s", v)
+	}
+}
+
+// The login name has its own field; empty means what ssh would use, and
+// the deploy then uses that name explicitly.
+func TestDeployUserField(t *testing.T) {
+	m, _ := deployModel(t)
+	m = send(t, m, keyMsg("d"))
+	for _, r := range "host2.example" {
+		m = send(t, m, keyMsg(string(r)))
+	}
+	if v := m.View(); !strings.Contains(v, "User") || !strings.Contains(v, "empty = ssh default") {
+		t.Errorf("user field:\n%s", v)
+	}
+	// What ssh would use (normally looked up in the background).
+	m = send(t, m, deployUserMsg{host: "host2.example", user: "alice"})
+	if got, err := m.deploy.fullTarget(); err != nil || got != "alice@host2.example" {
+		t.Errorf("default target = %q, %v", got, err)
+	}
+	if !strings.Contains(m.View(), "alice@host2.example") {
+		t.Errorf("resolved login not shown:\n%s", m.View())
+	}
+	// An explicit user wins.
+	m = send(t, m, keyMsg("tab"))
+	for _, r := range "deploy" {
+		m = send(t, m, keyMsg(string(r)))
+	}
+	if got, _ := m.deploy.fullTarget(); got != "deploy@host2.example" {
+		t.Errorf("explicit target = %q", got)
+	}
+	// A stale lookup for another host is not used.
+	m.deploy.user.SetValue("")
+	m.deploy.target.SetValue("host3.example")
+	if got, _ := m.deploy.fullTarget(); got != "host3.example" {
+		t.Errorf("stale default used: %q", got)
+	}
+	// user@host in the Server field still works, but not together with User.
+	m.deploy.target.SetValue("bob@host2.example")
+	if got, err := m.deploy.fullTarget(); err != nil || got != "bob@host2.example" {
+		t.Errorf("user@host = %q, %v", got, err)
+	}
+	m.deploy.user.SetValue("carol")
+	if _, err := m.deploy.fullTarget(); err == nil {
+		t.Error("user given twice accepted")
+	}
+	next, cmd := m.Update(keyMsg("enter"))
+	if mm := next.(model); cmd != nil || !strings.Contains(mm.deploy.err, "user given twice") {
+		t.Errorf("enter: err=%q", mm.deploy.err)
+	}
+	// Bad user name is refused before anything runs.
+	m.deploy.target.SetValue("host2.example")
+	m.deploy.user.SetValue("-oProxyCommand=x")
+	if _, err := m.deploy.fullTarget(); err == nil {
+		t.Error("bad user accepted")
 	}
 }

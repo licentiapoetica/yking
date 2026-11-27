@@ -306,7 +306,7 @@ func (s u2fScreen) view() string {
 	var b strings.Builder
 	k := s.key
 	b.WriteString(titleStyle.Render(fmt.Sprintf("PAM credential of %q (%s)", k.Known.Label, k.Serial)) + "\n")
-	b.WriteString(dimStyle.Render("Silent check: asks the key whether it owns each credential in "+tildePath(mappingPath())+".\nNo touch, no PIN, nothing written to the key.") + "\n\n")
+	b.WriteString("\n")
 	if s.busy != "" {
 		b.WriteString(s.busy + "\n")
 	}
@@ -323,7 +323,7 @@ func (s u2fScreen) view() string {
 		default:
 			b.WriteString(errStyle.Render(fmt.Sprintf("✗ None of your %d credential(s) belongs to this key.", r.total)) + "\n")
 			b.WriteString(warnStyle.Render("  Services set to \"key only\" will NOT accept this key.") + "\n\n")
-			b.WriteString(selStyle.Render("Press a to add a credential for it") + dimStyle.Render(" (pamu2fcfg, one touch; non-resident, nothing stored on the key)") + "\n")
+			b.WriteString(selStyle.Render("a to add a credential") + "\n")
 		}
 		if len(r.otherKeys) > 0 {
 			b.WriteString(dimStyle.Render(fmt.Sprintf("  Credential(s) %s are recorded on your other keys.", joinInts(r.otherKeys))) + "\n")

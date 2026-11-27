@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/licentiapoetica/yking/internal/askpass"
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 )
@@ -149,20 +148,11 @@ func (m model) linkPrepare(pub sshkey.PubKey) tea.Cmd {
 
 func (m model) linkSign(pub sshkey.PubKey, h sshkey.SKHandle) (tea.Model, tea.Cmd) {
 	s := &m.link
-	info := askpass.Info{Label: s.key.Known.Label, Serial: s.key.Serial, Retries: -1}
-	if f := s.key.FIDO; f != nil {
-		info.Retries, info.MinPINLength = f.PINRetries, f.MinPINLength
-		if h.PINRequired() {
-			if ok, why := f.PINPromptAllowed(); !ok {
-				s.err = "not testing: " + why
-				return m, nil
-			}
+	if f := s.key.FIDO; f != nil && h.PINRequired() {
+		if ok, why := f.PINPromptAllowed(); !ok {
+			s.err = "not testing: " + why
+			return m, nil
 		}
-	}
-	self, err := os.Executable()
-	if err != nil {
-		s.err = err.Error()
-		return m, nil
 	}
 	dir, err := os.MkdirTemp(os.Getenv("XDG_RUNTIME_DIR"), "yking-link-")
 	if err != nil {
@@ -171,26 +161,17 @@ func (m model) linkSign(pub sshkey.PubKey, h sshkey.SKHandle) (tea.Model, tea.Cm
 	}
 	data := filepath.Join(dir, "test")
 	os.WriteFile(data, []byte("yking ownership test "+time.Now().String()+"\n"), 0o600)
-	sess, err := askpass.Prepare(self, info)
-	if err != nil {
-		os.RemoveAll(dir)
-		s.err = err.Error()
-		return m, nil
-	}
-	how := "touch the key when it blinks"
-	if h.PINRequired() {
-		how = "enter the PIN (asked once), then touch the key"
-	}
-	run := &introExec{
-		cmd:   sshkey.SignTestCommand(privOf(pub.Path), data, sess.Env),
-		intro: fmt.Sprintf("\nyking: testing whether %s is on key %q (%s): %s.\nyking: this only signs a throwaway file; nothing is stored.\n\n", filepath.Base(privOf(pub.Path)), s.key.Known.Label, s.key.Serial, how),
-	}
 	s.busy = "Testing…"
-	return m, tea.Exec(run, func(err error) tea.Msg {
-		asked := sess.PINWasRequested()
-		sess.Close()
-		os.RemoveAll(dir)
-		return linkSignedMsg{pub: pub, handle: h, err: withTail(err, run), pinRequested: asked}
+	return m.startRun(runJob{
+		title: fmt.Sprintf("Is %s on %q?", filepath.Base(privOf(pub.Path)), s.key.Known.Label),
+		lines: nil,
+		cmd:   sshkey.SignTestCommand(privOf(pub.Path), data, nil),
+		key:   s.key.Known,
+		back:  modeLink,
+		done: func(r runResult) tea.Msg {
+			os.RemoveAll(dir)
+			return linkSignedMsg{pub: pub, handle: h, err: r.err, pinRequested: r.pinAsked}
+		},
 	})
 }
 
@@ -215,7 +196,7 @@ func (m model) linkRecord(pub sshkey.PubKey, h sshkey.SKHandle) (tea.Model, tea.
 func (s linkScreen) view() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Link an SSH key to %q (%s)", s.key.Known.Label, s.key.Serial)) + "\n")
-	b.WriteString(dimStyle.Render("PIN-protected SSH keys are invisible without the PIN, so the test is a real\nsignature of a throwaway file: PIN once + touch. Plug in only this key.") + "\n\n")
+	b.WriteString(dimStyle.Render("test: sign a throwaway file (PIN + touch)") + "\n\n")
 	if len(s.cands) == 0 {
 		b.WriteString("No unlinked security-key SSH keys in ~/.ssh.\n")
 	}
