@@ -424,3 +424,22 @@ func TestLockScreenInteractive(t *testing.T) {
 		t.Errorf("sudo got interactive:\n%s", sudo)
 	}
 }
+
+// Regression (Flatpak "Deploy not allowed", 2026-11-27): when polkit would
+// authenticate root, key-only polkit must be refused (new) or warned (kept).
+func TestPolkitAsksRoot(t *testing.T) {
+	m := discoverMap(t)
+	sts := []State{m["sudo"], m["login"], m["polkit-1"]}
+	f := Facts{ModuleInstalled: true, Credentials: 3, RegisteredKeys: 3, ConfirmedKeys: 3, PolkitAsksRoot: true}
+	b, _ := Check(sts, []Change{{"polkit-1", Config{Mode: ModeOnly}}}, f)
+	if !strings.Contains(strings.Join(b, "|"), "polkit asks for ROOT") {
+		t.Errorf("blocks = %v", b)
+	}
+	if b, _ := Check(sts, []Change{{"polkit-1", Config{Mode: ModeOr}}}, f); len(b) != 0 {
+		t.Errorf("key or password must stay allowed: %v", b)
+	}
+	f.PolkitAsksRoot = false
+	if b, _ := Check(sts, []Change{{"polkit-1", Config{Mode: ModeOnly}}}, f); len(b) != 0 {
+		t.Errorf("wheel member: %v", b)
+	}
+}

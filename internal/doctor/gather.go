@@ -76,6 +76,7 @@ func Gather(o Options) (Inputs, error) {
 	}
 
 	in.BootPending = luks.Pending()
+	in.PolkitAsksRoot = pam.PolkitAsksRoot(o.User)
 	in.PAM, _ = pam.Discover(pam.EtcDir, pam.VendorDir)
 	in.ModuleInstalled = pam.ModuleExists("pam_u2f.so")
 	in.PAMWrites = lastPAMWrites()

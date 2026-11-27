@@ -78,6 +78,7 @@ type Inputs struct {
 	Connected       []detect.KeyReport
 	Tests           map[string]time.Time // serial → last key test
 	BootPending     string               // id of an interrupted boot change
+	PolkitAsksRoot  bool
 }
 
 // TestEvery is how often every key — especially the one in the drawer —
@@ -281,6 +282,16 @@ func Run(in Inputs) []Finding {
 	// --- interrupted boot change
 	if in.BootPending != "" {
 		add(Error, "BOOT", "boot change "+in.BootPending+" was interrupted before the images were rebuilt and verified", "sudo yking luks repair — before rebooting")
+	}
+
+	// --- polkit asks root, but polkit is key-only
+	if in.PolkitAsksRoot {
+		for _, st := range in.PAM {
+			if st.Service.Name == "polkit-1" && (st.Current.Mode == pam.ModeOnly || st.Current.Mode == pam.ModeAnd) {
+				add(Error, "PAM", "admin prompts (polkit) ask for ROOT, who has no key credential — they fail instantly (e.g. Flatpak installs)",
+					"add yourself to wheel (sudo usermod -aG wheel $USER, log in again) or set polkit to \"key or password\" (p)")
+			}
+		}
 	}
 
 	// --- lock screen lockout

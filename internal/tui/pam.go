@@ -80,7 +80,8 @@ func newPAMScreen(krPath string) pamScreen {
 	if err != nil {
 		s.err = "reading " + s.mapping + ": " + err.Error()
 	}
-	s.facts = pam.Facts{ModuleInstalled: pam.ModuleExists("pam_u2f.so"), Credentials: creds, RegisteredKeys: registeredKeys, ConfirmedKeys: confirmed}
+	s.facts = pam.Facts{ModuleInstalled: pam.ModuleExists("pam_u2f.so"), Credentials: creds, RegisteredKeys: registeredKeys, ConfirmedKeys: confirmed,
+		PolkitAsksRoot: pam.PolkitAsksRoot(currentUser())}
 	s.recheck()
 	return s
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 )
@@ -50,6 +51,10 @@ type Facts struct {
 	// ConfirmedKeys are registered keys whose credential was found on the
 	// key itself (yking's silent check) and is still in the mapping.
 	ConfirmedKeys int
+	// PolkitAsksRoot: polkit's admin identity is not this user (Arch: user
+	// not in "wheel"), so polkit authenticates ROOT — who has no key
+	// credential. Key-only polkit then fails instantly.
+	PolkitAsksRoot bool
 }
 
 // Check evaluates a set of changes against the safety rules. blocks must
@@ -110,6 +115,20 @@ func Check(states []State, changes []Change, f Facts) (blocks, warns []string) {
 			strings.Join(kept, ", "), f.ConfirmedKeys))
 	}
 
+	if f.PolkitAsksRoot {
+		to, was := final["polkit-1"], cur["polkit-1"]
+		if to.Mode == ModeOnly || to.Mode == ModeAnd {
+			msg := "polkit asks for ROOT (you are not in the \"wheel\" group), and root has no key credential:\n" +
+				"  \"key only\" / \"password + key\" makes admin prompts fail (e.g. Flatpak installs). Use \"key or password\",\n" +
+				"  or add yourself to wheel (sudo usermod -aG wheel $USER, then log in again)."
+			if to.Mode != was.Mode {
+				blocks = append(blocks, msg)
+			} else {
+				warns = append(warns, msg)
+			}
+		}
+	}
+
 	passwordPath := false
 	for _, s := range states {
 		if s.Service.LoginPath && final[s.Service.Name].Mode.PasswordWorks() {
@@ -133,4 +152,29 @@ func dedupe(in []string) []string {
 		}
 	}
 	return out
+}
+
+// PolkitAsksRoot reports whether polkit would authenticate root instead of
+// user for admin actions: Arch's default rule makes "wheel" the admins; a
+// user outside wheel gets asked for root. (Extra rules in
+// /etc/polkit-1/rules.d are not readable without root and not considered.)
+func PolkitAsksRoot(username string) bool {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return false
+	}
+	g, err := user.LookupGroup("wheel")
+	if err != nil {
+		return false
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return false
+	}
+	for _, id := range gids {
+		if id == g.Gid {
+			return false
+		}
+	}
+	return true
 }
