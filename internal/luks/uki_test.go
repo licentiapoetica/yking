@@ -32,13 +32,13 @@ func TestParsePreset(t *testing.T) {
 func TestCmdlineWithout(t *testing.T) {
 	in := "cryptdevice=UUID=11111111-2222-3333-4444-555555555555:cryptlvm root=/dev/vg0/root zswap.enabled=0 rw rootfstype=ext4"
 	got := CmdlineWithout(in, true)
-	if got != "root=/dev/vg0/root zswap.enabled=0 rw rootfstype=ext4 rootflags=x-systemd.device-timeout=0" {
+	if got != "root=/dev/vg0/root zswap.enabled=0 rw rootfstype=ext4 rootflags=x-systemd.device-timeout=0 rd.systemd.show_status=error" {
 		t.Fatal(got)
 	}
-	if got := CmdlineWithout("cryptdevice=x:y root=/dev/sda2 rootflags=noatime cryptkey=rootfs:/k", true); got != "root=/dev/sda2 rootflags=noatime,x-systemd.device-timeout=0" {
+	if got := CmdlineWithout("cryptdevice=x:y root=/dev/sda2 rootflags=noatime cryptkey=rootfs:/k systemd.show_status=0", true); got != "root=/dev/sda2 rootflags=noatime,x-systemd.device-timeout=0 systemd.show_status=0" {
 		t.Fatal(got)
 	}
-	if got := CmdlineWithout("cryptdevice=x:y root=/dev/sda2", false); got != "root=/dev/sda2" {
+	if got := CmdlineWithout("cryptdevice=x:y root=/dev/sda2", false); got != "root=/dev/sda2 rd.systemd.show_status=error" {
 		t.Fatal(got)
 	}
 	if ValidateKernelCmdline(KernelCmdline, []byte(got+"\n")) != nil {
@@ -140,5 +140,16 @@ func TestUKIHas(t *testing.T) {
 	}
 	if err := ukiHas(uki, "cryptdevice=", "", "libfido2.so"); err == nil {
 		t.Fatal("missing file not caught")
+	}
+}
+
+func TestAddQuietStatus(t *testing.T) {
+	g := "GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX_DEFAULT=\"loglevel=3 quiet\"\nGRUB_CMDLINE_LINUX=\"root=/dev/vg0/root rw\"\n"
+	out, err := AddQuietStatus(g)
+	if err != nil || !strings.Contains(out, `GRUB_CMDLINE_LINUX="root=/dev/vg0/root rw rd.systemd.show_status=error"`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if again, _ := AddQuietStatus(out); again != out {
+		t.Fatal("added twice")
 	}
 }

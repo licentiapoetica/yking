@@ -71,6 +71,9 @@ func MigratePlan(v Volume, b Boot, cmdline string, now time.Time) (*plan.Plan, e
 			return nil, err
 		}
 	}
+	if newGrub, err = AddQuietStatus(newGrub); err != nil {
+		return nil, err
+	}
 	if err := CheckGrubWouldBoot(""); err != nil {
 		return nil, err
 	}

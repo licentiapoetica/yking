@@ -224,6 +224,33 @@ func RemoveCryptdevice(grub string) (string, []string, error) {
 // would end a slow unlock (PIN, touch, typing) in emergency mode.
 const RootDeviceTimeout = "x-systemd.device-timeout=0"
 
+// QuietStatus stops systemd's "A start job is running…" spinner in the
+// initramfs from overwriting the touch prompt ("Please confirm presence on
+// security token to unlock."); failures are still shown.
+const QuietStatus = "rd.systemd.show_status=error"
+
+// AddQuietStatus adds QuietStatus to GRUB_CMDLINE_LINUX unless a
+// show_status is set already.
+func AddQuietStatus(grub string) (string, error) {
+	if strings.Contains(GrubCmdline(grub), "systemd.show_status=") {
+		return grub, nil
+	}
+	lines := strings.Split(grub, "\n")
+	for i, l := range lines {
+		m := grubVarRe.FindStringSubmatch(l)
+		if m == nil || m[1] != "GRUB_CMDLINE_LINUX" {
+			continue
+		}
+		v := m[2]
+		if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' || strings.ContainsAny(v[1:len(v)-1], "\"$`\\") {
+			return "", errors.New("GRUB_CMDLINE_LINUX is not a plain double-quoted value; edit it by hand")
+		}
+		lines[i] = `GRUB_CMDLINE_LINUX="` + strings.Join(append(strings.Fields(v[1:len(v)-1]), QuietStatus), " ") + `"`
+		return strings.Join(lines, "\n"), nil
+	}
+	return "", errors.New("no GRUB_CMDLINE_LINUX line")
+}
+
 // AddRootflagsTimeout adds RootDeviceTimeout to rootflags= in
 // GRUB_CMDLINE_LINUX (creating rootflags= if needed).
 func AddRootflagsTimeout(grub string) (string, error) {

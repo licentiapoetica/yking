@@ -91,6 +91,9 @@ func CmdlineWithout(cmdline string, rootLV bool) string {
 	if rootLV && !found {
 		keep = append(keep, "rootflags="+RootDeviceTimeout)
 	}
+	if !strings.Contains(" "+strings.Join(keep, " "), "systemd.show_status=") {
+		keep = append(keep, QuietStatus)
+	}
 	return strings.Join(keep, " ")
 }
 
