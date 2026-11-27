@@ -171,19 +171,7 @@ func (r review) view(height int) string {
 	page := max(height-8, 3)
 	end := min(r.offset+page, len(r.lines))
 	for _, l := range r.lines[r.offset:end] {
-		switch {
-		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"):
-			b.WriteString(dimStyle.Render(l))
-		case strings.HasPrefix(l, "@@"):
-			b.WriteString(hunkStyle.Render(l))
-		case strings.HasPrefix(l, "+"):
-			b.WriteString(okStyle.Render(l))
-		case strings.HasPrefix(l, "-"):
-			b.WriteString(errStyle.Render(l))
-		default:
-			b.WriteString(l)
-		}
-		b.WriteString("\n")
+		b.WriteString(diffLine(l) + "\n")
 	}
 	if len(r.lines) > page {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("lines %d–%d of %d", r.offset+1, end, len(r.lines))) + "\n")
@@ -196,4 +184,32 @@ func (r review) view(height int) string {
 		b.WriteString(errStyle.Render(r.err) + "\n")
 	}
 	return b.String()
+}
+
+// diffLine colours one line of a unified diff.
+func diffLine(l string) string {
+	switch {
+	case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"):
+		return dimStyle.Render(l)
+	case strings.HasPrefix(l, "@@"):
+		return hunkStyle.Render(l)
+	case strings.HasPrefix(l, "+"):
+		return okStyle.Render(l)
+	case strings.HasPrefix(l, "-"):
+		return errStyle.Render(l)
+	}
+	return l
+}
+
+// colorDiff colours the diff in a text that contains one (a question from
+// a root command showing its plan); other text is returned unchanged.
+func colorDiff(text string) string {
+	if !strings.Contains(text, "\n@@ ") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = diffLine(l)
+	}
+	return strings.Join(lines, "\n")
 }

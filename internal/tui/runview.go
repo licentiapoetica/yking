@@ -34,7 +34,7 @@ func (m model) viewRun() string {
 		}
 
 	case r.prompt != nil && r.kind == promptChoice:
-		b.WriteString(fitPane(strings.TrimSpace(r.prompt.Prompt), m.width) + "\n\n")
+		b.WriteString(fitPane(colorDiff(strings.TrimSpace(r.prompt.Prompt)), m.width) + "\n\n")
 		var opts []string
 		for _, o := range r.prompt.Options {
 			opts = append(opts, selStyle.Render(o.Key)+" "+o.Label)
@@ -79,7 +79,7 @@ func (m model) viewRun() string {
 		b.WriteString("  PIN " + r.input.View() + "\n")
 
 	case r.prompt != nil && r.kind == promptYesNo:
-		b.WriteString(fitPane(strings.TrimSpace(r.prompt.Prompt), m.width) + "\n\n")
+		b.WriteString(fitPane(colorDiff(strings.TrimSpace(r.prompt.Prompt)), m.width) + "\n\n")
 		b.WriteString("  " + selStyle.Render("y") + " yes   " + selStyle.Render("n") + " no\n")
 
 	case r.prompt != nil:

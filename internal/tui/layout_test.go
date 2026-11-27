@@ -161,3 +161,17 @@ func TestInstallMissingFromTUI(t *testing.T) {
 		t.Fatalf("args %q", args)
 	}
 }
+
+func TestColorDiff(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	plain := "Remove passphrase slot(s) [0]?\n- not a diff"
+	if colorDiff(plain) != plain {
+		t.Fatal("non-diff text changed")
+	}
+	d := colorDiff("plan\n--- a\n+++ b\n@@ -1 +1 @@\n-HOOKS=(udev encrypt)\n+HOOKS=(systemd sd-encrypt)\n same")
+	lines := strings.Split(d, "\n")
+	if lines[4] != errStyle.Render("-HOOKS=(udev encrypt)") || lines[5] != okStyle.Render("+HOOKS=(systemd sd-encrypt)") || lines[6] != " same" || lines[0] != "plan" {
+		t.Fatalf("%q", lines)
+	}
+}
