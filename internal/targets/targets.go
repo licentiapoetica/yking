@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/licentiapoetica/yking/internal/chalresp"
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
+	"github.com/licentiapoetica/yking/internal/pgp"
 	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 )
@@ -21,7 +23,7 @@ func Default() []plan.Target {
 	return []plan.Target{
 		{Dir: "/etc/yking", Validate: validateYkingFile},
 		{Dir: pam.EtcDir, Validate: pam.Validate},
-		{Dir: filepath.Dir(events.RulePath), Validate: events.ValidateRule},
+		{Dir: filepath.Dir(events.RulePath), Validate: validateRule},
 		{Dir: filepath.Dir(events.UnitPath), Validate: events.ValidateUnit},
 		{Dir: filepath.Dir(events.BinaryPath), Validate: events.ValidateBinary},
 		{Dir: "/etc", Validate: validateEtcFile},
@@ -30,6 +32,14 @@ func Default() []plan.Target {
 		{Dir: filepath.Dir(luks.ConsoleDropIn), Validate: luks.ValidateConsoleDropIn},
 		{Dir: filepath.Dir(luks.MkinitcpioDropIn), Validate: luks.ValidateMkinitcpioDropIn},
 	}
+}
+
+// validateRule allows yking's two udev rules.
+func validateRule(path string, content []byte) error {
+	if path == chalresp.RulePath {
+		return chalresp.ValidateRule(path, content)
+	}
+	return events.ValidateRule(path, content)
 }
 
 // validateEtcFile allows exactly two files directly in /etc.
@@ -65,15 +75,17 @@ func Applier() *plan.Applier {
 	return a
 }
 
-// UserApplier writes the user's own files (no root): the pam_u2f mapping
-// and ~/.ssh/config (only yking's marked Host blocks change), with backups
-// under ~/.local/state/yking/backups.
+// UserApplier writes the user's own files (no root): the pam_u2f mapping,
+// ~/.ssh/config (only yking's marked Host blocks change), scdaemon.conf and
+// the global git config, with backups under ~/.local/state/yking/backups.
 func UserApplier(home string) *plan.Applier {
 	a := plan.NewApplier()
 	a.BackupRoot = filepath.Join(home, ".local", "state", "yking", "backups")
 	a.Targets = []plan.Target{
 		{Dir: filepath.Dir(pam.DefaultMappingPath(home)), Validate: pam.ValidateMapping},
 		{Dir: filepath.Dir(sshkey.ConfigPath(home)), Validate: sshkey.ValidateConfig},
+		{Dir: pgp.HomeDir(home), Validate: pgp.ValidateScdaemon},
+		{Dir: filepath.Dir(pgp.GitConfigPath(home)), Validate: pgp.ValidateGitConfig},
 	}
 	return a
 }
@@ -85,8 +97,11 @@ func TouchesPAM(p *plan.Plan) bool { return touches(paths(p), pam.EtcDir+"/") }
 // changed (never taken from a plan).
 func Reloads(changed []string) [][]string {
 	var out [][]string
-	if touches(changed, events.RulePath) {
+	if touches(changed, events.RulePath) || touches(changed, chalresp.RulePath) {
 		out = append(out, []string{"udevadm", "control", "--reload"})
+	}
+	if touches(changed, chalresp.RulePath) { // plugged keys get the access now
+		out = append(out, []string{"udevadm", "trigger", "--subsystem-match=hidraw", "--action=change"})
 	}
 	if touches(changed, events.UnitPath) {
 		out = append(out, []string{"systemctl", "daemon-reload"})

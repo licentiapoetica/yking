@@ -144,7 +144,7 @@ func TestSSHLoginSelector(t *testing.T) {
 	k, _ := kr.Add("22222222", "home-backup", keyring.RoleHomeBackup, t0())
 	k.Protected = false
 	rep := &detect.Report{Keys: []detect.KeyReport{{Serial: "22222222", Known: k, Info: ykman.DeviceInfo{Firmware: "5.8.0"}}}}
-	m := send(t, model{width: 120, height: 40}, scanDoneMsg{rep: rep, kr: kr}, keyMsg("s"))
+	m := send(t, model{width: 200, height: 40}, scanDoneMsg{rep: rep, kr: kr}, keyMsg("s"))
 	if v := m.View(); !strings.Contains(v, "[PIN + touch]") || !strings.Contains(v, "-O verify-required") {
 		t.Fatalf("default should be PIN + touch:\n%s", v)
 	}

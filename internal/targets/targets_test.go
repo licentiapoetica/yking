@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/licentiapoetica/yking/internal/chalresp"
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/fsutil"
 	"github.com/licentiapoetica/yking/internal/plan"
@@ -108,5 +109,28 @@ func TestUserApplierSSHConfig(t *testing.T) {
 	bad.WriteFile(filepath.Join(home, ".ssh", "authorized_keys"), []byte("ssh-ed25519 AAAA x\n"), 0o600)
 	if err := a.Check(bad); err == nil {
 		t.Error("authorized_keys write accepted")
+	}
+}
+
+func TestOTPRulePassesElevatedCheck(t *testing.T) {
+	st := plan.Step{Kind: plan.KindWriteFile, Path: chalresp.RulePath, Mode: 0o644, Content: chalresp.Rule}
+	if b, err := os.ReadFile(chalresp.RulePath); err == nil {
+		st.ExpectSHA256 = fsutil.SHA256(b)
+	} else {
+		st.ExpectAbsent = true
+	}
+	p := plan.New("otp rule", time.Now())
+	p.Steps = append(p.Steps, st)
+	if err := Applier().Check(p); err != nil {
+		t.Fatal(err)
+	}
+	bad := st
+	bad.Content = chalresp.Rule + `RUN+="/bin/sh"` + "\n"
+	p.Steps = []plan.Step{bad}
+	if Applier().Check(p) == nil {
+		t.Fatal("altered rule accepted")
+	}
+	if got := Reloads([]string{chalresp.RulePath}); len(got) != 2 || got[1][1] != "trigger" {
+		t.Fatalf("%v", got)
 	}
 }

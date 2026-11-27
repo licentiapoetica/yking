@@ -75,6 +75,24 @@ func TestRemoveSkipsLockWhenBlocked(t *testing.T) {
 	}
 }
 
+func TestRemoveKeepsLockedWhileATriggerKeyStays(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "connected.json")
+	c := cfg()
+	c.Triggers = []string{daily, home}
+	f := &fake{serials: []string{daily, home}, sessions: []Session{{ID: "2", User: "alice", Type: "wayland"}}}
+	Handle("add", c, registered, f.deps(state))
+	f.serials = []string{home} // daily pulled, home still in
+	Handle("remove", c, registered, f.deps(state))
+	if len(f.locked) != 0 || len(f.sudo) != 0 {
+		t.Fatalf("locked although a trigger key is still connected: %v", f.locked)
+	}
+	f.serials = nil // last trigger key pulled
+	Handle("remove", c, registered, f.deps(state))
+	if !slices.Equal(f.locked, []string{"2"}) {
+		t.Fatalf("did not lock after the last trigger key: %v", f.locked)
+	}
+}
+
 func TestRemoveWithoutStateFallsBack(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "connected.json")
 	f := &fake{serials: []string{daily}, sessions: []Session{{ID: "2", User: "alice", Type: "x11"}}}

@@ -85,6 +85,30 @@ type Key struct {
 	U2F  []U2FCred  `toml:"u2f,omitempty"`
 	SSH  []SSHKey   `toml:"ssh,omitempty"`
 	LUKS []LUKSSlot `toml:"luks,omitempty"`
+	PGP  []PGPKey   `toml:"pgp,omitempty"`
+	// HMAC is the challenge-response secret in OTP slot 2 (KeePassXC).
+	HMAC *HMACSlot `toml:"hmac,omitempty"`
+}
+
+// HMACSlot records an HMAC-SHA1 challenge-response secret yking wrote.
+// Set identifies the secret (a hash prefix, not the secret): keys with the
+// same Set give the same responses, so each opens the same databases.
+type HMACSlot struct {
+	Slot         int       `toml:"slot"`
+	Touch        bool      `toml:"touch"`
+	Set          string    `toml:"set"`
+	ProgrammedAt time.Time `toml:"programmed_at"`
+}
+
+// PGPKey records an OpenPGP subkey yking copied into one of the key's
+// card slots (public data only).
+type PGPKey struct {
+	Primary     string    `toml:"primary"`     // fingerprint of the identity's primary key
+	Fingerprint string    `toml:"fingerprint"` // the subkey's fingerprint
+	Slot        string    `toml:"slot"`        // sig, dec or aut
+	UserID      string    `toml:"user_id,omitempty"`
+	Touch       bool      `toml:"touch,omitempty"`
+	CopiedAt    time.Time `toml:"copied_at"`
 }
 
 // LUKSSlot records a FIDO2 keyslot this key unlocks.
@@ -121,7 +145,11 @@ type SSHKey struct {
 	CreatedAt       time.Time `toml:"created_at"`
 }
 
-var serialRe = regexp.MustCompile(`^[0-9]{1,10}$`)
+var (
+	serialRe  = regexp.MustCompile(`^[0-9]{1,10}$`)
+	pgpFprRe  = regexp.MustCompile(`^[0-9A-F]{40}$`)
+	hmacSetRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
+)
 
 // New returns an empty keyring.
 func New() *Keyring { return &Keyring{Version: SchemaVersion} }
@@ -210,6 +238,22 @@ func (k *Keyring) Validate() error {
 		seenLabel[key.Label] = true
 		if !key.Role.Valid() {
 			return fmt.Errorf("key %s: invalid role %q", key.Serial, key.Role)
+		}
+		if h := key.HMAC; h != nil && (h.Slot != 2 || !hmacSetRe.MatchString(h.Set)) {
+			return fmt.Errorf("key %s: invalid HMAC record", key.Serial)
+		}
+		slots := map[string]bool{}
+		for _, p := range key.PGP {
+			if !pgpFprRe.MatchString(p.Primary) || !pgpFprRe.MatchString(p.Fingerprint) {
+				return fmt.Errorf("key %s: invalid PGP fingerprint", key.Serial)
+			}
+			if p.Slot != "sig" && p.Slot != "dec" && p.Slot != "aut" {
+				return fmt.Errorf("key %s: invalid PGP slot %q", key.Serial, p.Slot)
+			}
+			if slots[p.Slot] {
+				return fmt.Errorf("key %s: PGP slot %s recorded twice", key.Serial, p.Slot)
+			}
+			slots[p.Slot] = true
 		}
 	}
 	return nil

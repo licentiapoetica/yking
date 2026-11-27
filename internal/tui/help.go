@@ -14,7 +14,37 @@ var (
 
 // renderHelp draws "key label · key label" as key caps with labels,
 // wrapped to width. A part without a label is shown as plain dim text.
-func renderHelp(help string, width int) string {
+func renderHelp(help string, width int) string { return renderHelpMax(help, width, 0) }
+
+// moreKeys ends a help bar that was cut short.
+const moreKeys = "? all keys"
+
+// renderHelpMax is renderHelp in at most maxLines lines (0: no limit);
+// what does not fit is replaced by "? all keys".
+func renderHelpMax(help string, width, maxLines int) string {
+	all := helpItems(help)
+	max := width
+	if max <= 0 {
+		max = 100
+	}
+	lines := flowHelp(all, max)
+	for n := len(all) - 1; maxLines > 0 && len(lines) > maxLines && n >= 0; n-- {
+		lines = flowHelp(append(append([]string{}, all[:n]...), helpItems(moreKeys)...), max)
+	}
+	rule := ruleSt.Render(strings.Repeat("─", min(max, 100)))
+	return rule + "\n" + strings.Join(lines, "\n")
+}
+
+// helpList is the full help, one key per line.
+func helpList(help string) string {
+	var b strings.Builder
+	for _, it := range helpItems(help) {
+		b.WriteString("  " + it + "\n")
+	}
+	return b.String()
+}
+
+func helpItems(help string) []string {
 	var items []string
 	for _, part := range strings.Split(help, " · ") {
 		k, label, ok := strings.Cut(part, " ")
@@ -24,10 +54,10 @@ func renderHelp(help string, width int) string {
 		}
 		items = append(items, keyCap.Render(k)+" "+keyLabel.Render(label))
 	}
-	max := width
-	if max <= 0 {
-		max = 100
-	}
+	return items
+}
+
+func flowHelp(items []string, max int) []string {
 	var lines []string
 	cur := ""
 	for _, it := range items {
@@ -40,7 +70,5 @@ func renderHelp(help string, width int) string {
 		}
 		cur += it
 	}
-	lines = append(lines, cur)
-	rule := ruleSt.Render(strings.Repeat("─", min(max, 100)))
-	return rule + "\n" + strings.Join(lines, "\n")
+	return append(lines, cur)
 }

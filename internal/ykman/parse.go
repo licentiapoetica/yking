@@ -190,3 +190,52 @@ func parseOTPInfo(b []byte) OTPInfo {
 	}
 	return o
 }
+
+func parseOpenPGPInfo(b []byte) OpenPGPInfo {
+	o := OpenPGPInfo{PINTries: -1, AdminPINTries: -1, ResetCodeTries: -1}
+	num := func(v string) int {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	for _, l := range lines(b) {
+		k, v, ok := splitKV(l)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(k) {
+		case "openpgp version":
+			o.Version = v
+		case "pin tries remaining":
+			o.PINTries = num(v)
+		case "admin pin tries remaining":
+			o.AdminPINTries = num(v)
+		case "reset code tries remaining":
+			o.ResetCodeTries = num(v)
+		case "require pin for signature":
+			o.SignaturePolicy = v
+		}
+	}
+	return o
+}
+
+func parsePGPSlot(b []byte) PGPSlot {
+	var s PGPSlot
+	for _, l := range lines(b) {
+		k, v, ok := splitKV(l)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(k) {
+		case "fingerprint":
+			s.Fingerprint = strings.ToUpper(strings.ReplaceAll(v, " ", ""))
+		case "algorithm":
+			s.Algorithm = v
+		case "touch policy":
+			s.Touch = v
+		}
+	}
+	return s
+}

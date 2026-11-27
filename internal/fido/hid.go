@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // DefaultSysRoot is where Linux exposes hidraw devices.
@@ -33,4 +34,30 @@ func CountDevices(sysRoot string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// usageKeyboard is "Usage Page (Generic Desktop), Usage (Keyboard)": the
+// YubiKey's OTP interface, which challenge-response over USB goes through.
+var usageKeyboard = []byte{0x05, 0x01, 0x09, 0x06}
+
+// YubicoOTPNodes lists the hidraw names (hidraw7, …) of YubiKey OTP
+// interfaces.
+func YubicoOTPNodes(sysRoot string) ([]string, error) {
+	ents, err := os.ReadDir(sysRoot)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		dev := filepath.Join(sysRoot, e.Name(), "device")
+		ev, err := os.ReadFile(filepath.Join(dev, "uevent"))
+		if err != nil || !strings.Contains(string(ev), "HID_ID=0003:00001050:") {
+			continue
+		}
+		desc, err := os.ReadFile(filepath.Join(dev, "report_descriptor"))
+		if err == nil && bytes.HasPrefix(desc, usageKeyboard) {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
 }

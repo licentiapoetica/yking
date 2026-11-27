@@ -151,9 +151,8 @@ func keyArt(label string) ([]string, int, int) {
 
 func (m model) viewLoading() string {
 	var b strings.Builder
-	if m.width == 0 || m.width >= 50 {
-		b.WriteString(drawKey(m.frame, "yking", false))
-		b.WriteString("\n")
+	if art := m.art("yking", false); art != "" {
+		b.WriteString(art + "\n")
 	}
 	spin := selStyle.Render(spinner[m.frame%len(spinner)])
 	b.WriteString("  " + spin + " " + titleStyle.Render("Scanning your YubiKeys") + "\n\n")
@@ -168,6 +167,14 @@ func (m model) viewLoading() string {
 }
 
 func dots(frame int) string { return strings.Repeat(".", (frame/5)%4) }
+
+// art is the animated key, or "" when the window has no room for it.
+func (m model) art(label string, fast bool) string {
+	if m.width != 0 && (m.width < 50 || (m.height > 0 && m.height < 24)) {
+		return ""
+	}
+	return drawKey(m.frame, label, fast)
+}
 
 // drawKey renders one frame: a diagonal shine moving left to right over the
 // outline and lettering, and the disc breathing green like a YubiKey's LED

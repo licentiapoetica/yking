@@ -74,7 +74,7 @@ func (m model) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	r := &m.review
-	page := max(m.height-12, 5)
+	page := max(m.layout().avail-8, 3)
 	switch key.String() {
 	case "esc", "q":
 		if r.userDone != "" {
@@ -168,7 +168,7 @@ func (r review) view(height int) string {
 		b.WriteString(warnStyle.Render(r.note) + "\n\n")
 	}
 
-	page := max(height-12, 5)
+	page := max(height-8, 3)
 	end := min(r.offset+page, len(r.lines))
 	for _, l := range r.lines[r.offset:end] {
 		switch {

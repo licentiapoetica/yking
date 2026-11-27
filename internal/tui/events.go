@@ -182,7 +182,7 @@ func (m model) buildEventsPlan() (tea.Model, tea.Cmd) {
 		s.err = err.Error()
 		return m, nil
 	}
-	m.review.note = "Test after applying: pull out a trigger key → the screen locks. Log: journalctl -u 'yking-event@*' -n 20"
+	m.review.note = "Test after applying: pull out every trigger key → the screen locks. Log: journalctl -u 'yking-event@*' -n 20"
 	m.reviewBack = modeEvents
 	m.mode = modeReview
 	return m, nil
@@ -204,13 +204,13 @@ func (s eventsScreen) view() string {
 		}
 		return "  "
 	}
-	b.WriteString("Pulling out one of these keys triggers the actions below:\n")
+	b.WriteString("Pulling out the last of these keys triggers the actions below:\n")
 	for i, k := range s.keys {
 		b.WriteString(cur(i) + box(s.triggers[k.Serial]) + fmt.Sprintf(" %-12s %-12s %s", k.Label, k.Role, k.Serial) + "\n")
 	}
 	b.WriteString("\n")
 	n := len(s.keys)
-	b.WriteString("When a trigger key is pulled out:\n")
+	b.WriteString("When the last trigger key is pulled out:\n")
 	b.WriteString(cur(n) + box(s.cfg.OnRemove.Lock) + " lock the screen\n")
 	b.WriteString(cur(n+1) + box(s.cfg.OnRemove.SudoReset) + " forget cached sudo (next sudo asks again)\n")
 	b.WriteString("When a registered key is plugged in:\n")

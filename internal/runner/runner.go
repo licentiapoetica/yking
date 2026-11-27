@@ -34,8 +34,18 @@ type Exec struct {
 	Timeout time.Duration
 }
 
+// StdinRunner can also feed stdin (secrets never go on a command line).
+type StdinRunner interface {
+	RunStdin(ctx context.Context, stdin []byte, name string, args ...string) (Result, error)
+}
+
 // Run executes name with args, forcing the C locale so output is parseable.
 func (e Exec) Run(ctx context.Context, name string, args ...string) (Result, error) {
+	return e.RunStdin(ctx, nil, name, args...)
+}
+
+// RunStdin is Run with stdin (nil: none).
+func (e Exec) RunStdin(ctx context.Context, stdin []byte, name string, args ...string) (Result, error) {
 	timeout := e.Timeout
 	if timeout == 0 {
 		timeout = DefaultTimeout
@@ -46,6 +56,9 @@ func (e Exec) Run(ctx context.Context, name string, args ...string) (Result, err
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	cmd.Stdin = nil // never let a tool read an interactive answer from us
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

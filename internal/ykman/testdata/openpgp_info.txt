@@ -1,0 +1,7 @@
+OpenPGP version:            3.4
+Application version:        5.7.1
+PIN tries remaining:        3
+Reset code tries remaining: 0
+Admin PIN tries remaining:  2
+Require PIN for signature:  Once
+KDF enabled:                False

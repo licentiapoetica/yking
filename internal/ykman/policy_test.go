@@ -22,10 +22,12 @@ func TestAllowlistHasNoForbiddenTokens(t *testing.T) {
 	}
 }
 
-func TestOnlyReadOnlyRulesInM1(t *testing.T) {
+// Add-only rules exist only for an empty OTP slot 2, guarded by
+// ProgramChalResp's fresh read.
+func TestAddOnlyRules(t *testing.T) {
 	for _, r := range allowlist {
-		if r.kind != ReadOnly {
-			t.Errorf("rule %q is %s; only read-only rules are allowed until add-only preconditions exist", r.name, r.kind)
+		if r.kind != ReadOnly && !strings.HasPrefix(r.name, "otp-chalresp") {
+			t.Errorf("rule %q is %s; only otp-chalresp may write", r.name, r.kind)
 		}
 	}
 }
@@ -38,6 +40,11 @@ func TestCheckAllows(t *testing.T) {
 		{"--device", "12345678", "info"},
 		{"--device", "12345678", "fido", "info"},
 		{"--device", "12345678", "otp", "info"},
+		{"--device", "12345678", "openpgp", "info"},
+		{"--device", "12345678", "openpgp", "keys", "info", "dec"},
+		{"--device", "12345678", "otp", "calculate", "2", "00ff"},
+		{"--device", "12345678", "otp", "chalresp", "--touch", "2"},
+		{"--device", "12345678", "otp", "delete", "2"},
 	} {
 		if _, err := Check(args); err != nil {
 			t.Errorf("Check(%v) = %v, want allowed", args, err)
@@ -63,6 +70,14 @@ func TestCheckRefuses(t *testing.T) {
 		{"--device", "12345678", "info", "extra"},
 		{"info"}, // device must be selected explicitly
 		{"LIST"},
+		{"--device", "12345678", "openpgp", "keys", "info", "att"},
+		{"--device", "12345678", "otp", "chalresp", "2", "00112233"}, // secret on argv
+		{"--device", "12345678", "otp", "chalresp", "1"},
+		{"--device", "12345678", "otp", "delete", "1"},
+		{"--device", "12345678", "otp", "delete", "2", "--force"},
+		{"otp", "delete", "2"},
+		{"--device", "12345678", "otp", "calculate", "2", "XYZ"},
+		{"--device", "12345678", "openpgp", "keys", "set-touch", "sig", "fixed"},
 	} {
 		_, err := Check(args)
 		var pe *PolicyError

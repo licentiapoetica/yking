@@ -73,25 +73,23 @@ func Handle(action string, cfg *Config, registered []string, d Deps) (*Result, e
 
 	switch action {
 	case "remove":
-		trigger := false
-		if known {
-			for _, s := range r.Removed {
-				if cfg.IsTrigger(s, registered) {
-					trigger = true
-				}
+		// Act when the last trigger key is gone: a trigger key still
+		// plugged in means the user is still there (e.g. swapping keys).
+		// Without state (first event since boot) a trigger key need not
+		// be seen leaving.
+		trigger := !known
+		for _, s := range r.Removed {
+			if cfg.IsTrigger(s, registered) {
+				trigger = true
 			}
-		} else {
-			// No state (first event since boot): act only if no trigger
-			// key is connected any more.
-			trigger = true
-			for _, s := range now {
-				if cfg.IsTrigger(s, registered) {
-					trigger = false
-				}
+		}
+		for _, s := range now {
+			if cfg.IsTrigger(s, registered) {
+				trigger = false
 			}
 		}
 		if !trigger {
-			d.Log("remove: no trigger key removed (removed %v, still connected %v); nothing to do", r.Removed, now)
+			d.Log("remove: a trigger key is still connected or none was removed (removed %v, still connected %v); nothing to do", r.Removed, now)
 			return r, nil
 		}
 		if cfg.OnRemove.SudoReset {

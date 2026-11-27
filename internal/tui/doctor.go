@@ -197,7 +197,7 @@ func (s doctorScreen) view(height int) string {
 	}
 	b.WriteString("\n")
 
-	page := max(height-len(s.rows)-12, 5)
+	page := max(height-len(s.rows)-8, 3)
 	end := min(s.offset+page, len(s.findings))
 	for _, f := range s.findings[s.offset:end] {
 		icon, style := severityStyle(f.Severity)

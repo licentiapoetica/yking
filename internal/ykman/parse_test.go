@@ -140,3 +140,62 @@ func TestClientInfo(t *testing.T) {
 		t.Errorf("got %+v", info)
 	}
 }
+
+func TestParseOpenPGP(t *testing.T) {
+	o := parseOpenPGPInfo(fixture(t, "openpgp_info.txt"))
+	if o.Version != "3.4" || o.PINTries != 3 || o.AdminPINTries != 2 || o.ResetCodeTries != 0 {
+		t.Fatalf("%+v", o)
+	}
+	if ok, _ := o.AdminPromptAllowed(); !ok {
+		t.Fatal("2 tries left must still allow the prompt")
+	}
+	o.AdminPINTries = 1
+	if ok, _ := o.AdminPromptAllowed(); ok {
+		t.Fatal("1 try left must refuse")
+	}
+	s := parsePGPSlot(fixture(t, "openpgp_key_info.txt"))
+	if s.Fingerprint != "111122223333444455556666777788889999AAAA" || s.Touch != "On" || s.Algorithm != "ED25519" || s.Empty {
+		t.Fatalf("%+v", s)
+	}
+}
+
+type stdinRunner struct {
+	fakeRunner
+	stdin []byte
+}
+
+func (s *stdinRunner) RunStdin(ctx context.Context, stdin []byte, name string, args ...string) (runner.Result, error) {
+	s.stdin = stdin
+	s.calls = append(s.calls, append([]string{name}, args...))
+	return runner.Result{}, nil
+}
+
+func TestProgramChalRespOnlyIntoEmptySlot(t *testing.T) {
+	secret := []byte{0xaa, 0xbb}
+	busy := &stdinRunner{fakeRunner: fakeRunner{out: map[string][]byte{"--device 12345678 otp info": []byte("Slot 1: empty\nSlot 2: programmed\n")}}}
+	if err := New(busy).ProgramChalResp(context.Background(), "12345678", secret, true); !errors.Is(err, ErrSlotNotEmpty) || busy.stdin != nil {
+		t.Fatalf("err=%v stdin=%q", err, busy.stdin)
+	}
+	free := &stdinRunner{fakeRunner: fakeRunner{out: map[string][]byte{"--device 12345678 otp info": []byte("Slot 1: empty\nSlot 2: empty\n")}}}
+	if err := New(free).ProgramChalResp(context.Background(), "12345678", secret, true); err != nil {
+		t.Fatal(err)
+	}
+	last := strings.Join(free.calls[len(free.calls)-1], " ")
+	if last != "ykman --device 12345678 otp chalresp --touch 2" || string(free.stdin) != "aabb\ny\n" {
+		t.Fatalf("call %q stdin %q", last, free.stdin)
+	}
+}
+
+func TestClearChalResp(t *testing.T) {
+	empty := &stdinRunner{fakeRunner: fakeRunner{out: map[string][]byte{"--device 12345678 otp info": []byte("Slot 1: empty\nSlot 2: empty\n")}}}
+	if err := New(empty).ClearChalResp(context.Background(), "12345678"); err == nil || empty.stdin != nil {
+		t.Fatalf("cleared an empty slot: %v", err)
+	}
+	used := &stdinRunner{fakeRunner: fakeRunner{out: map[string][]byte{"--device 12345678 otp info": []byte("Slot 1: programmed\nSlot 2: programmed\n")}}}
+	if err := New(used).ClearChalResp(context.Background(), "12345678"); err != nil {
+		t.Fatal(err)
+	}
+	if last := strings.Join(used.calls[len(used.calls)-1], " "); last != "ykman --device 12345678 otp delete 2" || string(used.stdin) != "y\n" {
+		t.Fatalf("%q %q", last, used.stdin)
+	}
+}

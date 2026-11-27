@@ -34,7 +34,7 @@ func (m model) viewRun() string {
 		}
 
 	case r.prompt != nil && r.kind == promptChoice:
-		b.WriteString(paneStyle.Render(strings.TrimSpace(r.prompt.Prompt)) + "\n\n")
+		b.WriteString(fitPane(strings.TrimSpace(r.prompt.Prompt), m.width) + "\n\n")
 		var opts []string
 		for _, o := range r.prompt.Options {
 			opts = append(opts, selStyle.Render(o.Key)+" "+o.Label)
@@ -47,7 +47,7 @@ func (m model) viewRun() string {
 
 	case r.phase == phaseWaiting:
 		k := r.job.need
-		b.WriteString(drawKey(m.frame, k.Label, false) + "\n")
+		b.WriteString(m.art(k.Label, false) + "\n")
 		b.WriteString("  " + warnStyle.Render("Plug in ") + keyName2(k) + "\n")
 		b.WriteString(dimStyle.Render("  "+r.job.needWhy) + "\n\n")
 		b.WriteString("  " + spin + dimStyle.Render(" waiting…") + "\n")
@@ -57,8 +57,13 @@ func (m model) viewRun() string {
 
 	case r.prompt != nil && r.kind == promptPIN:
 		k := r.promptKey
-		if k != nil {
-			b.WriteString(drawKey(m.frame, k.Label, false) + "\n")
+		if r.minPIN > 0 { // OpenPGP: the prompt names key and tries
+			if k != nil {
+				b.WriteString(m.art(k.Label, false) + "\n")
+			}
+			b.WriteString("  " + r.prompt.Prompt + "\n")
+		} else if k != nil {
+			b.WriteString(m.art(k.Label, false) + "\n")
 			tries := ""
 			if f := m.fidoOf(k.Serial); f != nil && f.PINRetries >= 0 {
 				tries = fmt.Sprintf(" — %d tries left", f.PINRetries)
@@ -74,7 +79,7 @@ func (m model) viewRun() string {
 		b.WriteString("  PIN " + r.input.View() + "\n")
 
 	case r.prompt != nil && r.kind == promptYesNo:
-		b.WriteString(paneStyle.Render(strings.TrimSpace(r.prompt.Prompt)) + "\n\n")
+		b.WriteString(fitPane(strings.TrimSpace(r.prompt.Prompt), m.width) + "\n\n")
 		b.WriteString("  " + selStyle.Render("y") + " yes   " + selStyle.Render("n") + " no\n")
 
 	case r.prompt != nil:
@@ -85,13 +90,13 @@ func (m model) viewRun() string {
 	case r.touching:
 		k := r.touchKey
 		if k != nil {
-			b.WriteString(drawKey(m.frame, k.Label, true) + "\n")
+			b.WriteString(m.art(k.Label, true) + "\n")
 			b.WriteString("  " + okStyle.Bold(true).Render("Touch ") + keyName2(k) + okStyle.Bold(true).Render(" now") + "\n")
 			if r.touchFile != "" {
 				b.WriteString(dimStyle.Render("  SSH key "+r.touchFile) + "\n")
 			}
 		} else {
-			b.WriteString(drawKey(m.frame, "touch", true) + "\n")
+			b.WriteString(m.art("touch", true) + "\n")
 			b.WriteString("  " + okStyle.Bold(true).Render("Touch the blinking YubiKey now") + "\n")
 			if r.touch != nil {
 				b.WriteString(dimStyle.Render("  "+r.touch.Prompt) + "\n")

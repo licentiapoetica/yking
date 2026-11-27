@@ -15,9 +15,12 @@ import (
 //   - Every ykman invocation must exactly match a rule in the allowlist below.
 //   - No rule may contain a destructive verb (see forbiddenTokens). A unit
 //     test enforces this, so adding such a rule fails the build's tests.
-//   - Only read-only rules exist in M1. Add-only rules (e.g. programming an
-//     EMPTY OTP slot) arrive in later milestones and must carry a
-//     precondition check run against a fresh inventory of the key.
+//   - Add-only rules (programming an EMPTY OTP slot) run only through a
+//     client method that re-reads the key right before and refuses unless
+//     the target is empty (ProgramChalResp).
+//   - The ONE exception to "never delete" is clearOTPSlot2 below: OTP slot
+//     2 only, offered by the TUI only for a key whose slot just failed the
+//     challenge-response test, after the user typed the key's label.
 
 // Kind classifies what a rule does to the key.
 type Kind int
@@ -25,21 +28,35 @@ type Kind int
 const (
 	// ReadOnly rules never change key state.
 	ReadOnly Kind = iota
+	// AddOnly rules write into an empty slot; their client method checks
+	// that it is empty first.
+	AddOnly
 )
 
 func (k Kind) String() string {
 	switch k {
 	case ReadOnly:
 		return "read-only"
+	case AddOnly:
+		return "add-only"
+	case Clear:
+		return "clear OTP slot 2"
 	default:
 		return "unknown"
 	}
 }
 
 // placeholder tokens in rule patterns.
-const serialArg = "<serial>"
+const (
+	serialArg  = "<serial>"
+	pgpSlotArg = "<pgp-slot>" // sig, dec or aut
+	hexArg     = "<hex>"      // a challenge (not a secret), 2–128 hex digits
+)
 
-var serialRe = regexp.MustCompile(`^[0-9]{1,10}$`)
+var (
+	serialRe = regexp.MustCompile(`^[0-9]{1,10}$`)
+	hexRe    = regexp.MustCompile(`^([0-9a-f]{2}){1,64}$`)
+)
 
 type rule struct {
 	name    string
@@ -54,7 +71,20 @@ var allowlist = []rule{
 	{"info", ReadOnly, []string{"--device", serialArg, "info"}},
 	{"fido-info", ReadOnly, []string{"--device", serialArg, "fido", "info"}},
 	{"otp-info", ReadOnly, []string{"--device", serialArg, "otp", "info"}},
+	{"openpgp-info", ReadOnly, []string{"--device", serialArg, "openpgp", "info"}},
+	{"openpgp-key-info", ReadOnly, []string{"--device", serialArg, "openpgp", "keys", "info", pgpSlotArg}},
+	{"otp-calculate", ReadOnly, []string{"--device", serialArg, "otp", "calculate", "2", hexArg}},
+	// The secret is read from stdin, never passed here.
+	{"otp-chalresp", AddOnly, []string{"--device", serialArg, "otp", "chalresp", "2"}},
+	{"otp-chalresp-touch", AddOnly, []string{"--device", serialArg, "otp", "chalresp", "--touch", "2"}},
 }
+
+// clearOTPSlot2 is the only deleting invocation yking may run
+// (ClearChalResp). It is matched exactly, before the forbidden-token scan.
+var clearOTPSlot2 = []string{"--device", serialArg, "otp", "delete", "2"}
+
+// Clear marks the single deleting rule.
+const Clear Kind = 100
 
 // forbiddenTokens may never appear in any ykman invocation, no matter what
 // the allowlist says. Defense in depth against a bad rule edit.
@@ -92,6 +122,9 @@ func (e *PolicyError) Error() string {
 // Check returns the matching rule's kind, or a *PolicyError if args are not
 // allowed.
 func Check(args []string) (Kind, error) {
+	if matches(clearOTPSlot2, args) {
+		return Clear, nil
+	}
 	for _, a := range args {
 		if forbiddenTokens[strings.ToLower(a)] {
 			return 0, &PolicyError{args, fmt.Sprintf("forbidden token %q", a)}
@@ -113,6 +146,14 @@ func matches(pattern, args []string) bool {
 		switch p {
 		case serialArg:
 			if !serialRe.MatchString(args[i]) {
+				return false
+			}
+		case hexArg:
+			if !hexRe.MatchString(args[i]) {
+				return false
+			}
+		case pgpSlotArg:
+			if args[i] != "sig" && args[i] != "dec" && args[i] != "aut" {
 				return false
 			}
 		default:

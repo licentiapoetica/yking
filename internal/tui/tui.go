@@ -14,6 +14,7 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pgp"
 	"github.com/licentiapoetica/yking/internal/sshkey"
 	"github.com/licentiapoetica/yking/internal/ykman"
 )
@@ -52,6 +53,8 @@ const (
 	modeLUKS
 	modeImport
 	modeHosts
+	modePGP
+	modeKeePass
 	modeRun
 )
 
@@ -75,6 +78,9 @@ type model struct {
 	width    int
 	height   int
 	status   string // one-line result of the last action
+	scroll   int    // first body line shown when the screen is taller than the window
+	helpOpen bool   // "?": the full key list replaces the screen
+	free     bool   // scrolled by wheel/PgUp/PgDn: do not snap back to the ▸ cursor
 
 	enroll     enrollForm
 	review     review
@@ -90,6 +96,8 @@ type model struct {
 	luks       luksScreen
 	imp        importScreen
 	hosts      hostsScreen
+	pgp        pgpScreen
+	kp         kpScreen
 	run        runner
 	// pendingArchive: revoked key files to move once the plan applied.
 	pendingArchive []string
@@ -106,7 +114,7 @@ type model struct {
 
 // Run starts the TUI.
 func Run(cfg Config) error {
-	_, err := tea.NewProgram(model{cfg: cfg, scanning: true}, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(model{cfg: cfg, scanning: true}, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -120,8 +128,48 @@ func (m model) selected() (detect.KeyReport, bool) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if ms, ok := msg.(tea.MouseMsg); ok {
+		return m.wheel(ms)
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && !strings.HasPrefix(k.String(), "pg") {
+		m.free = false // a key may move the cursor: show it again
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && m.helpOpen {
+		switch k.String() {
+		case "?", "esc", "q":
+			m.helpOpen, m.scroll = false, 0
+		case "pgup", "up":
+			m = m.scrollBy(-max(m.layout().avail-2, 1))
+		case "pgdown", "down":
+			m = m.scrollBy(max(m.layout().avail-2, 1))
+		case "ctrl+c":
+			return m.update(msg)
+		}
+		return m, nil
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "?" && !m.typing() {
+		m.helpOpen, m.scroll = true, 0
+		return m, nil
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && !m.pagesOwnScroll() {
+		switch k.String() {
+		case "pgup":
+			return m.scrollBy(-max(m.layout().avail-2, 1)), nil
+		case "pgdown":
+			return m.scrollBy(max(m.layout().avail-2, 1)), nil
+		}
+	}
 	next, cmd := m.update(msg)
-	return next.(model).keepAnimating(cmd)
+	n := next.(model)
+	if n.mode != m.mode {
+		n.scroll = 0
+	}
+	if n.mode == modeKeePass && m.mode != modeKeePass { // (re)entered: poll the plugged keys
+		kpGen++
+		n.kp.gen = kpGen
+		cmd = tea.Batch(cmd, n.kpRead())
+	}
+	return n.keepAnimating(cmd)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -155,6 +203,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case applyDoneMsg:
 		m.mode = modeKeys
+		var reload tea.Cmd
+		switch m.reviewBack {
+		case modePGP:
+			pgp.GPG{}.Kill("scdaemon") // picks up a changed scdaemon.conf
+			m.mode, m.pgp.loading, reload = modePGP, true, m.loadPGP()
+		case modeKeePass: // the udev rule: back to the screen, secret kept
+			m.mode = modeKeePass
+		}
 		var parts []string
 		if msg.userID != "" {
 			parts = append(parts, "your file updated (undo: yking rollback --user "+msg.userID+")")
@@ -180,7 +236,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = style.Render(strings.ToUpper(strings.Join(parts, "; ")[:1]) + strings.Join(parts, "; ")[1:] + ".")
 		m.scanning = true
-		return m, m.scan()
+		return m, tea.Batch(m.scan(), reload)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.mode == modeRun && m.run.job.noCancel && m.run.phase == phaseRunning {
@@ -227,6 +283,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateImport(msg)
 	case modeHosts:
 		return m.updateHosts(msg)
+	case modePGP:
+		return m.updatePGP(msg)
+	case modeKeePass:
+		return m.updateKeePass(msg)
 	case modeRun:
 		return m.updateRun(msg)
 	default:
@@ -326,6 +386,12 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = dimStyle.Render("Testing " + k.Known.Label + " (silent, no touch)…")
 			return m, m.keyTest(*k.Known)
 		}
+	case "g":
+		return m.openPGP()
+	case "v":
+		if !m.scanning {
+			return m.openKeePass()
+		}
 	case "u":
 		m.events = newEventsScreen(m.cfg.KeyringPath)
 		m.mode = modeEvents
@@ -386,21 +452,33 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+// screen renders the current mode's content and its help line. height is
+// the room the content gets (screens that page use it).
+func (m model) screen(height int) (string, string) {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("yking") + dimStyle.Render(" — YubiKey setup") + "\n\n")
-
 	var help string
 	switch m.mode {
 	case modeEnroll:
 		b.WriteString(m.enroll.view())
 		help = "tab field · ←→ role · space toggle · enter review · esc cancel"
 	case modeReview:
-		b.WriteString(m.review.view(m.height))
+		b.WriteString(m.review.view(height))
 		help = "↑↓ scroll · a apply · esc back"
 	case modeRun:
 		b.WriteString(m.viewRun())
 		help = m.runHelp()
+	case modeKeePass:
+		b.WriteString(m.kp.view())
+		help = m.kp.help()
+	case modePGP:
+		b.WriteString(m.pgp.view())
+		help = "↑↓ identity · n new · a sign key · w to card · b backup · g git · x card-only · f fix gpg · r reload · esc back"
+		switch {
+		case m.pgp.inputFor != pgpInputNone:
+			help = "enter ok · esc cancel"
+		case m.pgp.askOnly:
+			help = "y yes · n no"
+		}
 	case modeHosts:
 		b.WriteString(m.hosts.view())
 		help = "↑↓ host · enter review · r reload · esc back"
@@ -411,7 +489,7 @@ func (m model) View() string {
 		b.WriteString(m.luks.view())
 		help = "e enroll · ←→ unlock · m switch boot · s status · R repair · esc back"
 	case modeDoctor:
-		b.WriteString(m.doctor.view(m.height))
+		b.WriteString(m.doctor.view(height))
 		help = "↑↓ scroll · r recheck · esc back"
 	case modeEvents:
 		b.WriteString(m.events.view())
@@ -453,14 +531,9 @@ func (m model) View() string {
 			help = "q quit"
 			break
 		}
-		help = "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
+		help = "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · g PGP · v KeePassXC · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
 	}
-
-	if m.status != "" {
-		b.WriteString("\n" + m.status + "\n")
-	}
-	b.WriteString("\n" + renderHelp(help, m.width))
-	return b.String()
+	return b.String(), help
 }
 
 func (m model) viewKeys() string {
@@ -507,11 +580,11 @@ func (m model) viewKeys() string {
 		list.WriteString("\n" + warnStyle.Render("! only 1 key registered — add a backup") + "\n")
 	}
 
-	left := paneStyle.Render(strings.TrimRight(list.String(), "\n"))
+	left := fitPane(strings.TrimRight(list.String(), "\n"), m.width)
 	if len(rep.Keys) == 0 {
 		return b.String() + left + "\n"
 	}
-	right := paneStyle.Render(detail(rep.Keys[m.cursor], m.coverage))
+	right := fitPane(detail(rep.Keys[m.cursor], m.coverage), m.width)
 	if m.width > 0 && lipgloss.Width(left)+lipgloss.Width(right)+1 > m.width {
 		return b.String() + left + "\n" + right + "\n"
 	}
@@ -530,7 +603,9 @@ func keyName(k detect.KeyReport) string {
 
 func detail(k detect.KeyReport, coverage map[string]bool) string {
 	var b strings.Builder
-	row := func(label, val string) { fmt.Fprintf(&b, "%-14s %s\n", dimStyle.Render(label), val) }
+	row := func(label, val string) {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("%-14s", label)) + " " + val + "\n")
+	}
 
 	row("Model", or(k.Info.DeviceType, "?"))
 	row("Serial", k.Serial)
