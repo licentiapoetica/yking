@@ -13,6 +13,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 // Default returns the production targets.
@@ -64,12 +65,16 @@ func Applier() *plan.Applier {
 	return a
 }
 
-// UserApplier writes the user's own files (no root): only the pam_u2f
-// mapping directory, with backups under ~/.local/state/yking/backups.
+// UserApplier writes the user's own files (no root): the pam_u2f mapping
+// and ~/.ssh/config (only yking's marked Host blocks change), with backups
+// under ~/.local/state/yking/backups.
 func UserApplier(home string) *plan.Applier {
 	a := plan.NewApplier()
 	a.BackupRoot = filepath.Join(home, ".local", "state", "yking", "backups")
-	a.Targets = []plan.Target{{Dir: filepath.Dir(pam.DefaultMappingPath(home)), Validate: pam.ValidateMapping}}
+	a.Targets = []plan.Target{
+		{Dir: filepath.Dir(pam.DefaultMappingPath(home)), Validate: pam.ValidateMapping},
+		{Dir: filepath.Dir(sshkey.ConfigPath(home)), Validate: sshkey.ValidateConfig},
+	}
 	return a
 }
 

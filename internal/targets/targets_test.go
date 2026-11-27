@@ -2,6 +2,7 @@ package targets
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/fsutil"
 	"github.com/licentiapoetica/yking/internal/plan"
+	"github.com/licentiapoetica/yking/internal/sshkey"
 )
 
 // A plan built like the TUI builds it must pass the real elevated check
@@ -67,5 +69,44 @@ func TestReloads(t *testing.T) {
 	}
 	if len(Reloads([]string{"/etc/pam.d/sudo"})) != 0 {
 		t.Error("PAM change triggered a reload")
+	}
+}
+
+// The user applier writes ~/.ssh/config (only "config", validated) with a
+// backup, and rollback restores the user's original file.
+func TestUserApplierSSHConfig(t *testing.T) {
+	home := t.TempDir()
+	path := sshkey.ConfigPath(home)
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	orig := "Host work.example\n    User bob\n"
+	os.WriteFile(path, []byte(orig), 0o600)
+
+	e := sshkey.HostEntry{Host: "a.example", Users: []string{"alice"},
+		Keys: []sshkey.HostKey{{Path: filepath.Join(home, ".ssh", "yk-main-01"), Label: "daily", Serial: "11111111"}}}
+	p, _, err := sshkey.ConfigPlan(path, home, e, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := UserApplier(home)
+	m, err := a.Apply(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "IdentityFile ~/.ssh/yk-main-01") || !strings.HasSuffix(string(got), orig) {
+		t.Errorf("applied config:\n%s", got)
+	}
+	if _, err := a.Rollback(m.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != orig {
+		t.Errorf("rollback left:\n%s", got)
+	}
+
+	// Anything else in ~/.ssh is refused.
+	bad := plan.New("x", time.Now())
+	bad.WriteFile(filepath.Join(home, ".ssh", "authorized_keys"), []byte("ssh-ed25519 AAAA x\n"), 0o600)
+	if err := a.Check(bad); err == nil {
+		t.Error("authorized_keys write accepted")
 	}
 }
