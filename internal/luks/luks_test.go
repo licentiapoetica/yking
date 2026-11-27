@@ -341,3 +341,36 @@ func TestDropIns(t *testing.T) {
 		t.Errorf("rebuilds = %v", r)
 	}
 }
+
+func TestWipeSelection(t *testing.T) {
+	tok := func(id int) *Token { return &Token{ID: id, Type: "systemd-fido2", Keyslots: []int{id + 1}} }
+	h := Header{Slots: []Slot{{ID: 0}, {ID: 1, Token: tok(0)}, {ID: 2, Token: tok(1)}, {ID: 3, Token: tok(2)}, {ID: 4, Token: tok(3)}}}
+	for _, s := range h.Slots {
+		if s.Token != nil {
+			h.Tokens = append(h.Tokens, *s.Token)
+		}
+	}
+	owner := map[int]string{4: "home-backup"}
+	got, err := WipeSelection(h, "1,2, 3", owner, false)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("got %v %v", got, err)
+	}
+	for name, c := range map[string]struct {
+		list string
+		too  bool
+	}{
+		"passphrase slot": {"0", false},
+		"recorded slot":   {"4", false},
+		"missing slot":    {"9", false},
+		"all fido2":       {"1,2,3,4", true},
+		"garbage":         {"1;2", false},
+		"empty":           {"", false},
+	} {
+		if _, err := WipeSelection(h, c.list, owner, c.too); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if got, err := WipeSelection(h, "4", owner, true); err != nil || got[0] != 4 {
+		t.Errorf("recorded-too: %v %v", got, err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -211,4 +212,69 @@ func Wipe(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// WipeSelection validates which slots may be removed: only FIDO2 slots,
+// not those recorded for a registered key (unless recordedToo), and at
+// least one FIDO2 slot plus the passphrase slot(s) must remain.
+func WipeSelection(h Header, list string, owner map[int]string, recordedToo bool) ([]int, error) {
+	if list == "" {
+		return nil, errors.New("--slot is required, e.g. --slot 1,2,3")
+	}
+	byID := map[int]Slot{}
+	for _, s := range h.Slots {
+		byID[s.ID] = s
+	}
+	seen := map[int]bool{}
+	var out []int
+	for _, f := range regexp.MustCompile(`\s*,\s*`).Split(list, -1) {
+		var n int
+		if _, err := fmt.Sscanf(f, "%d", &n); err != nil || fmt.Sprint(n) != f {
+			return nil, fmt.Errorf("bad slot %q", f)
+		}
+		s, ok := byID[n]
+		switch {
+		case !ok:
+			return nil, fmt.Errorf("slot %d does not exist", n)
+		case s.Token == nil:
+			return nil, fmt.Errorf("slot %d is a passphrase/key-file slot; yking never removes those", n)
+		case s.Token.Type != "systemd-fido2":
+			return nil, fmt.Errorf("slot %d is %s, not FIDO2", n, s.Token.Type)
+		case owner[n] != "" && !recordedToo:
+			return nil, fmt.Errorf("slot %d is %q's (recorded by yking); add --recorded-too to remove it anyway", n, owner[n])
+		}
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	if len(h.FIDO2())-len(out) < 1 {
+		return nil, errors.New("that would remove every FIDO2 slot; keep at least one")
+	}
+	if len(h.PasswordSlots()) == 0 {
+		return nil, errors.New("no passphrase slot on this volume; refusing")
+	}
+	return out, nil
+}
+
+// RunWipe removes slots with systemd-cryptenroll (no terminal; the
+// passphrase unlocks via $PASSWORD).
+func RunWipe(device string, slots []int, pass []byte, out *os.File) error {
+	if !devRe.MatchString(device) || len(slots) == 0 {
+		return errors.New("bad arguments")
+	}
+	var list []string
+	for _, s := range slots {
+		list = append(list, fmt.Sprint(s))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemd-cryptenroll", "--wipe-slot="+strings.Join(list, ","), device)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "PASSWORD=" + string(pass)}
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("systemd-cryptenroll --wipe-slot failed: %w", err)
+	}
+	return nil
 }

@@ -378,7 +378,7 @@ func (e *introExec) Run() error {
 		bufio.NewReader(e.tty).ReadString('\n')
 	}
 	if err != nil && e.stdout != nil && e.tty != nil {
-		fmt.Fprintf(e.stdout, "\nyking: %s failed (%v).\nPress Enter to return to yking… ", filepath.Base(e.cmd.Path), err)
+		fmt.Fprintf(e.stdout, "\nyking: the command did not succeed (%v) — see the message above.\nPress Enter to return to yking… ", err)
 		bufio.NewReader(e.tty).ReadString('\n')
 	}
 	return err
