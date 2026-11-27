@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/licentiapoetica/yking/internal/deps"
+	"github.com/licentiapoetica/yking/internal/fido"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -79,6 +81,13 @@ func Gather(o Options) (Inputs, error) {
 	in.PolkitAsksRoot = pam.PolkitAsksRoot(o.User)
 	in.PAM, _ = pam.Discover(pam.EtcDir, pam.VendorDir)
 	in.ModuleInstalled = pam.ModuleExists("pam_u2f.so")
+	var otp func() string
+	for _, k := range kr.Keys {
+		if k.HMAC != nil {
+			otp = func() string { return fido.OTPAccess(fido.DefaultSysRoot, "/dev") }
+		}
+	}
+	in.Deps = deps.Check(deps.Local(func() bool { return in.ModuleInstalled }, otp))
 	in.PAMWrites = lastPAMWrites()
 
 	e := &in.Events

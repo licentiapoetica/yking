@@ -5,6 +5,7 @@ package detect
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/ykman"
@@ -132,7 +133,7 @@ func inventory(ctx context.Context, c *ykman.Client, kr *keyring.Keyring, serial
 	r := KeyReport{Serial: serial, Known: kr.Find(serial)}
 	info, err := c.Info(ctx, serial)
 	if err != nil {
-		r.Errors = append(r.Errors, "info: "+err.Error())
+		r.Errors = append(r.Errors, "info: "+short(err))
 	}
 	r.Info = info
 
@@ -145,7 +146,7 @@ func inventory(ctx context.Context, c *ykman.Client, kr *keyring.Keyring, serial
 	}
 	if appEnabled(info, "Yubico OTP") {
 		if o, err := c.OTPInfo(ctx, serial); err != nil {
-			r.Errors = append(r.Errors, "otp info: "+err.Error())
+			r.Errors = append(r.Errors, "otp info: "+short(err))
 		} else {
 			r.OTP = &o
 		}
@@ -160,4 +161,12 @@ func appEnabled(info ykman.DeviceInfo, app string) bool {
 		return true
 	}
 	return info.Apps[app].USB == "Enabled"
+}
+
+// short replaces ykman's long PC/SC complaint with what it means.
+func short(err error) string {
+	if strings.Contains(err.Error(), "PC/SC not available") {
+		return "needs pcscd (smart-card service), see the top of the screen"
+	}
+	return err.Error()
 }

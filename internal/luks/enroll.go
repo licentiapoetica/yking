@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -75,6 +77,19 @@ func EnrollArgs(device, hidraw string, u Unlock) ([]string, error) {
 	}, nil
 }
 
+// EnrollWithKeyArgs enrolls hidraw while the already enrolled key at
+// unlockHidraw opens the volume (no passphrase needed).
+func EnrollWithKeyArgs(device, unlockHidraw, hidraw string, u Unlock) ([]string, error) {
+	if unlockHidraw == hidraw || !regexp.MustCompile(`^/dev/hidraw[0-9]+$`).MatchString(unlockHidraw) {
+		return nil, errors.New("bad unlocking device")
+	}
+	args, err := EnrollArgs(device, hidraw, u)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{"--unlock-fido2-device=" + unlockHidraw}, args...), nil
+}
+
 // BackupHeader stores a LUKS header backup and returns its path.
 func BackupHeader(device, uuid string, now time.Time) (string, error) {
 	if err := os.MkdirAll(HeaderBackupDir, 0o700); err != nil {
@@ -109,11 +124,29 @@ func TestPassphrase(device string, pass []byte) error {
 // systemd-cryptenroll asks for through the ask-password agent protocol when
 // creating a credential) is answered by AnswerPINOnce — once. Output goes
 // to out.
-func RunEnroll(args []string, pass, pin []byte, out *os.File) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+func RunEnroll(args []string, pass, pin []byte, out io.Writer) error {
+	var pins [][]byte
+	if pin != nil {
+		pins = [][]byte{pin}
+	}
+	return runEnroll(args, pass, pins, out)
+}
+
+// RunEnrollWithKey is RunEnroll for args from EnrollWithKeyArgs: an
+// enrolled key unlocks (no passphrase), so up to two PIN requests come —
+// the unlocking key's, then the new key's — answered with pins in order.
+func RunEnrollWithKey(args []string, pins [][]byte, out io.Writer) error {
+	return runEnroll(args, nil, pins, out)
+}
+
+func runEnroll(args []string, pass []byte, pins [][]byte, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "systemd-cryptenroll", args...)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "PASSWORD=" + string(pass)}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+	if pass != nil {
+		cmd.Env = append(cmd.Env, "PASSWORD="+string(pass))
+	}
 	cmd.Stdin = nil
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -122,14 +155,7 @@ func RunEnroll(args []string, pass, pin []byte, out *os.File) error {
 	}
 	agentCtx, stopAgent := context.WithCancel(ctx)
 	agentErr := make(chan error, 1)
-	go func() {
-		if pin == nil {
-			// No PIN expected: any request at all is unexpected.
-			agentErr <- AnswerPINOnce(agentCtx, cmd.Process.Pid, nil, func() { cmd.Process.Kill() }, true)
-			return
-		}
-		agentErr <- AnswerPINOnce(agentCtx, cmd.Process.Pid, pin, func() { cmd.Process.Kill() }, false)
-	}()
+	go func() { agentErr <- AnswerPINs(agentCtx, cmd.Process.Pid, pins, func() { cmd.Process.Kill() }) }()
 	err := cmd.Wait()
 	stopAgent()
 	if aerr := <-agentErr; aerr != nil {
@@ -216,8 +242,23 @@ func Wipe(b []byte) {
 
 // WipeSelection validates which slots may be removed: only FIDO2 slots,
 // not those recorded for a registered key (unless recordedToo), and at
-// least one FIDO2 slot plus the passphrase slot(s) must remain.
+// least one FIDO2 slot plus a passphrase or recovery key must remain.
 func WipeSelection(h Header, list string, owner map[int]string, recordedToo bool) ([]int, error) {
+	return wipeSelection(h, list, owner, recordedToo, true)
+}
+
+// WipeSelectionWithKey is WipeSelection for a disk opened by the enrolled
+// key holding authSlot (key-only disks): no passphrase needed, but that
+// key's own slot stays.
+func WipeSelectionWithKey(h Header, list string, owner map[int]string, recordedToo bool, authSlot int) ([]int, error) {
+	out, err := wipeSelection(h, list, owner, recordedToo, false)
+	if err == nil && slices.Contains(out, authSlot) {
+		err = fmt.Errorf("slot %d belongs to the plugged-in key that opens the disk; plug in another enrolled key", authSlot)
+	}
+	return out, err
+}
+
+func wipeSelection(h Header, list string, owner map[int]string, recordedToo, needSecret bool) ([]int, error) {
 	if list == "" {
 		return nil, errors.New("--slot is required, e.g. --slot 1,2,3")
 	}
@@ -251,15 +292,15 @@ func WipeSelection(h Header, list string, owner map[int]string, recordedToo bool
 	if len(h.FIDO2())-len(out) < 1 {
 		return nil, errors.New("that would remove every FIDO2 slot; keep at least one")
 	}
-	if len(h.PasswordSlots()) == 0 {
-		return nil, errors.New("no passphrase slot on this volume; refusing")
+	if needSecret && len(h.PasswordSlots()) == 0 && !h.HasRecovery() {
+		return nil, errors.New("no passphrase or recovery key on this volume; refusing")
 	}
 	return out, nil
 }
 
 // RunWipe removes slots with systemd-cryptenroll (no terminal; the
 // passphrase unlocks via $PASSWORD).
-func RunWipe(device string, slots []int, pass []byte, out *os.File) error {
+func RunWipe(device string, slots []int, pass []byte, out io.Writer) error {
 	if !devRe.MatchString(device) || len(slots) == 0 {
 		return errors.New("bad arguments")
 	}
@@ -277,4 +318,21 @@ func RunWipe(device string, slots []int, pass []byte, out *os.File) error {
 		return fmt.Errorf("systemd-cryptenroll --wipe-slot failed: %w", err)
 	}
 	return nil
+}
+
+// RunWipeWithKey removes slots while the enrolled key at unlockHidraw
+// opens the volume (no passphrase): its PIN request gets pin, once.
+func RunWipeWithKey(device, unlockHidraw string, slots []int, pin []byte, out io.Writer) error {
+	if !devRe.MatchString(device) || !regexp.MustCompile(`^/dev/hidraw[0-9]+$`).MatchString(unlockHidraw) || len(slots) == 0 {
+		return errors.New("bad arguments")
+	}
+	var list []string
+	for _, s := range slots {
+		list = append(list, fmt.Sprint(s))
+	}
+	var pins [][]byte
+	if pin != nil {
+		pins = [][]byte{pin}
+	}
+	return runEnroll([]string{"--unlock-fido2-device=" + unlockHidraw, "--wipe-slot=" + strings.Join(list, ","), device}, nil, pins, out)
 }

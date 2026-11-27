@@ -25,7 +25,7 @@ yking doctor                # health check
 yking history               # applied changes
 yking rollback [ID]         # undo one
 yking rollback --user [ID]  # undo a change to your own files (u2f_keys, ~/.ssh/config)
-yking luks status|enroll|migrate|repair|wipe
+yking luks status|enroll|migrate|repair|wipe|backup|passphrase remove
 ```
 
 ## Uninstall

@@ -590,8 +590,9 @@ func TestEventsRefuseLockWithLockoutRisk(t *testing.T) {
 }
 
 func TestLUKSScreen(t *testing.T) {
-	oldV, oldB, oldP := luksVolumes, luksDiscoverBoot, luksPending
-	defer func() { luksVolumes, luksDiscoverBoot, luksPending = oldV, oldB, oldP }()
+	oldV, oldB, oldP, oldS := luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot = oldV, oldB, oldP, oldS }()
+	luksSnapshot = func() (*luks.Snapshot, error) { return nil, nil }
 	root := luks.Volume{Device: "/dev/nvme0n1p2", UUID: "aaaa1111", Version: 2, Mapper: "cryptroot", Root: true, RootLV: true}
 	luksVolumes = func() ([]luks.Volume, error) {
 		return []luks.Volume{root, {Device: "/dev/sdb1", UUID: "x", Version: 1}}, nil
@@ -607,7 +608,7 @@ func TestLUKSScreen(t *testing.T) {
 
 	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
 	v := m.View()
-	for _, want := range []string{"/dev/nvme0n1p2 · LUKS2 · cryptroot → LVM", "IGNORED at boot", "daily", "not enrolled", "LUKS1: FIDO2 needs LUKS2"} {
+	for _, want := range []string{"/dev/nvme0n1p2 · LUKS2 · cryptroot → LVM", "IGNORED at boot", "daily", "not enrolled", "FIDO2 needs LUKS2", "Keyslots unknown"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q:\n%s", want, v)
 		}
@@ -940,5 +941,123 @@ func TestDeployUserField(t *testing.T) {
 	m.deploy.user.SetValue("-oProxyCommand=x")
 	if _, err := m.deploy.fullTarget(); err == nil {
 		t.Error("bad user accepted")
+	}
+}
+
+// Removing the passphrase runs inside the TUI (run screen), never by
+// handing the terminal over.
+func TestLUKSRemovePassphraseStaysInTUI(t *testing.T) {
+	oldV, oldB, oldP := luksVolumes, luksDiscoverBoot, luksPending
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending = oldV, oldB, oldP }()
+	root := luks.Volume{Device: "/dev/vda2", UUID: "aaaa1111", Version: 2, Mapper: "cryptroot", Root: true}
+	luksVolumes = func() ([]luks.Volume, error) { return []luks.Volume{root}, nil }
+	luksDiscoverBoot = func() luks.Boot { return luks.Boot{Method: "sd-encrypt", GRUB: true} }
+	luksPending = func() string { return "" }
+
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	kr := keyring.New()
+	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	kr.Add("22222222", "offsite", keyring.RoleOffsite, t0())
+	kr.Keys[0].LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaa1111", Keyslot: 1}}
+	kr.Save(krPath)
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
+	if mm := send(t, m, keyMsg("P")); mm.mode != modeLUKS || !strings.Contains(mm.luks.err, "two keys") {
+		t.Fatalf("one key enrolled: mode=%v err=%q", mm.mode, mm.luks.err)
+	}
+	kr.Keys[1].LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaa1111", Keyslot: 2}}
+	kr.Save(krPath)
+	m = send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
+	next, _ := m.Update(keyMsg("P"))
+	mm := next.(model)
+	if mm.mode != modeRun || !mm.run.job.noCancel {
+		t.Fatalf("not on the run screen: mode=%v", mm.mode)
+	}
+	if args := strings.Join(mm.run.job.cmd.Args, " "); !strings.Contains(args, "luks passphrase remove --tui "+sockArg) {
+		t.Fatalf("args %q", args)
+	}
+	mm.run.stop(errCancelled)
+}
+
+func TestLUKSHeaderBackupStaysInTUI(t *testing.T) {
+	oldV, oldB, oldP := luksVolumes, luksDiscoverBoot, luksPending
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending = oldV, oldB, oldP }()
+	luksVolumes = func() ([]luks.Volume, error) {
+		return []luks.Volume{{Device: "/dev/vda2", UUID: "aaaa1111", Version: 2, Root: true}}, nil
+	}
+	luksDiscoverBoot = func() luks.Boot { return luks.Boot{Method: "sd-encrypt"} }
+	luksPending = func() string { return "" }
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	keyring.New().Save(krPath)
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"), keyMsg("H"))
+	if !m.luks.asking || !m.typing() {
+		t.Fatal("no folder field")
+	}
+	m.luks.input.SetValue("/run/media/alice/STICK")
+	next, _ := m.Update(keyMsg("enter"))
+	mm := next.(model)
+	if mm.mode != modeRun {
+		t.Fatalf("mode %v", mm.mode)
+	}
+	if args := strings.Join(mm.run.job.cmd.Args, " "); !strings.Contains(args, "luks backup --out /run/media/alice/STICK") {
+		t.Fatalf("args %q", args)
+	}
+}
+
+func TestLUKSEnrollStaysInTUI(t *testing.T) {
+	oldV, oldB, oldP := luksVolumes, luksDiscoverBoot, luksPending
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending = oldV, oldB, oldP }()
+	luksVolumes = func() ([]luks.Volume, error) {
+		return []luks.Volume{{Device: "/dev/vda2", UUID: "aaaa1111", Version: 2, Root: true}}, nil
+	}
+	luksDiscoverBoot = func() luks.Boot { return luks.Boot{Method: "sd-encrypt"} }
+	luksPending = func() string { return "" }
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	keyring.New().Save(krPath)
+	m := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 50}, keyMsg("b"))
+	next, _ := m.Update(keyMsg("e"))
+	mm := next.(model)
+	if mm.mode != modeRun {
+		t.Fatalf("mode %v", mm.mode)
+	}
+	if args := strings.Join(mm.run.job.cmd.Args, " "); !strings.Contains(args, "luks enroll --unlock pin+touch --tui "+sockArg) {
+		t.Fatalf("args %q", args)
+	}
+}
+
+func TestLUKSSlotTable(t *testing.T) {
+	oldV, oldB, oldP, oldS, oldN := luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot, luksNow
+	defer func() { luksVolumes, luksDiscoverBoot, luksPending, luksSnapshot, luksNow = oldV, oldB, oldP, oldS, oldN }()
+	luksVolumes = func() ([]luks.Volume, error) {
+		return []luks.Volume{{Device: "/dev/vda2", UUID: "aaaa1111", Version: 2, Root: true}, {Device: "/dev/vdb1", UUID: "bbbb2222", Version: 1}}, nil
+	}
+	luksDiscoverBoot = func() luks.Boot { return luks.Boot{Method: "sd-encrypt"} }
+	luksPending = func() string { return "" }
+	read := t0()
+	luksNow = func() time.Time { return read.Add(3 * time.Minute) }
+	luksSnapshot = func() (*luks.Snapshot, error) {
+		return &luks.Snapshot{ReadAt: read, Volumes: []luks.SnapVolume{
+			{UUID: "aaaa1111", Version: 2, Cipher: "aes-xts-plain64", Slots: []luks.SnapSlot{
+				{ID: 0, Kind: luks.KindPassphrase, KDF: "argon2id"},
+				{ID: 4, Kind: luks.KindFIDO2, KDF: "pbkdf2", PIN: true, Touch: true},
+				{ID: 6, Kind: luks.KindFIDO2, KDF: "pbkdf2", Touch: true},
+			}},
+			{UUID: "bbbb2222", Version: 1, Cipher: "aes-xts-plain64", Slots: []luks.SnapSlot{{ID: 0, Kind: luks.KindPassphrase}, {ID: 1, Kind: luks.KindPassphrase}}},
+		}}, nil
+	}
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	kr := keyring.New()
+	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	kr.Add("22222222", "offsite", keyring.RoleOffsite, t0())
+	kr.Add("33333333", "spare", keyring.RoleHomeBackup, t0())
+	kr.Keys[0].LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaa1111", Keyslot: 4}}
+	kr.Keys[1].LUKS = []keyring.LUKSSlot{{DeviceUUID: "aaaa1111", Keyslot: 5}} // stale record
+	kr.Save(krPath)
+	v := send(t, model{cfg: Config{KeyringPath: krPath}, width: 140, height: 60}, keyMsg("b")).View()
+	for _, want := range []string{"Cipher:       aes-xts-plain64", "Passphrase:   set   Recovery key: none", "read 3 min ago",
+		"FIDO2  daily", "PIN + touch", "unknown key", "touch only", "recorded but not on the disk: offsite (slot 5)",
+		"not enrolled: spare", "/dev/vdb1 · LUKS1 · aes-xts-plain64 · 2 passphrase"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("missing %q:\n%s", want, v)
+		}
 	}
 }

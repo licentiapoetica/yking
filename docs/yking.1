@@ -56,7 +56,9 @@ Stage an export; finish it in the TUI with
 LUKS volumes, keyslots and the boot unlock method.
 .TP
 .BR "luks enroll" " [" \-\-device " \fIDEV\fR] [" \-\-unlock " " pin+touch | touch ]
-Add the plugged-in key as a FIDO2 keyslot.
+Add a key as a FIDO2 keyslot. Plugged in alone, the passphrase or recovery
+key authorizes it; plugged in next to an already enrolled key, that key
+does (PIN and touch), so a disk without passphrase can get new keys.
 .TP
 .BR "luks migrate" " [" \-\-dry\-run ]
 Switch the initramfs to systemd unlocking (needed for FIDO2 at boot).
@@ -68,7 +70,24 @@ Rebuild the boot files after a failed migration.
 Find which keyslot belongs to the plugged-in key.
 .TP
 .BI "luks wipe \-\-slot " N\fR[,\fIM\fR...] " \fR[" "\-\-device " DEV\fR]
-Remove FIDO2 keyslots from the disk (the passphrase stays).
+Remove FIDO2 keyslots from the disk (the passphrase or recovery key stays).
+On a disk without passphrase, one plugged-in enrolled key authorizes it;
+its own slot cannot be removed.
+.TP
+.BR "luks backup" " [" \-\-device " \fIDEV\fR] [" \-\-out " \fIDIR\fR]"
+Save the LUKS header in
+.I /var/lib/yking/luks
+and, with
+.BR \-\-out ,
+copy it into a folder off this disk (that one belongs to the user).
+Both copies are verified.
+.TP
+.B luks passphrase remove
+Remove the passphrase of the root volume and replace it with a recovery
+key (shown once) or nothing (key-only). Only when boot unlocks with FIDO2,
+two registered keys are enrolled and the plugged-in key has just unlocked
+the volume the way boot does. Key-only: losing every key loses the data; adding a key then needs an
+enrolled key plugged in next to the new one.
 .TP
 .BR event " " add | remove | status
 Plug/unplug handler run by
@@ -112,7 +131,7 @@ KeePassXC: write one HMAC-SHA1 challenge-response secret into OTP slot 2
 of each key.
 .TP
 .B b
-Disk: LUKS FIDO2 enrollment and boot switch.
+Disk: LUKS FIDO2 enrollment, boot switch, header backup, passphrase removal.
 .TP
 .B u
 Plug/unplug actions: lock the screen and reset sudo when the last trigger
@@ -191,6 +210,10 @@ Registered keys and what each one holds (no secrets).
 .TP
 .I /etc/yking/events.toml
 Plug/unplug configuration.
+.TP
+.I /var/lib/yking/luks-slots.json
+Keyslot lists of the LUKS volumes as root last read them (no secrets), for
+the disk screen.
 .TP
 .I /var/lib/yking/backups/
 Backups of system files, one directory per applied plan.

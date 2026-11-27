@@ -165,6 +165,8 @@ func (m model) typing() bool {
 		return m.pgp.inputFor != pgpInputNone
 	case modeKeePass:
 		return m.kp.inputFor != kpInputNone
+	case modeLUKS:
+		return m.luks.asking
 	}
 	return false
 }

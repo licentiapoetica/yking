@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // DefaultSysRoot is where Linux exposes hidraw devices.
@@ -60,4 +61,22 @@ func YubicoOTPNodes(sysRoot string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// OTPAccess says why the YubiKey OTP interface cannot be used ("" = ok):
+// ykman computes challenge-response over USB only there.
+func OTPAccess(sysRoot, devRoot string) string {
+	nodes, err := YubicoOTPNodes(sysRoot)
+	switch {
+	case err != nil:
+		return err.Error()
+	case len(nodes) == 0:
+		return "no YubiKey OTP interface found"
+	}
+	for _, n := range nodes {
+		if syscall.Access(filepath.Join(devRoot, n), 6) != nil { // read+write
+			return "OTP interface not accessible (/dev/" + n + ")"
+		}
+	}
+	return ""
 }

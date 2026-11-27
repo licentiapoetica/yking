@@ -303,7 +303,8 @@ func (m model) updateRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.lines = r.lines[len(r.lines)-50:]
 		}
 		// ssh-keygen prints its touch request instead of using askpass.
-		if low := strings.ToLower(msg.line); strings.Contains(low, "touch your authenticator") || strings.Contains(low, "touch the device") {
+		if low := strings.ToLower(msg.line); strings.Contains(low, "touch your authenticator") || strings.Contains(low, "touch the device") ||
+			strings.Contains(low, "confirm presence") || strings.Contains(low, "when it blinks") {
 			r.touching, r.touchKey, r.touchFile = true, r.job.key, ""
 		} else if r.touch == nil {
 			r.touching = false

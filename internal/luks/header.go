@@ -14,6 +14,7 @@ import (
 type Slot struct {
 	ID    int
 	Token *Token // the token that unlocks it, if any
+	KDF   string // argon2id, pbkdf2, …
 }
 
 // Token is a LUKS2 token (systemd-fido2, systemd-tpm2, …).
@@ -31,6 +32,7 @@ type Token struct {
 type Header struct {
 	Slots  []Slot
 	Tokens []Token
+	Cipher string // data segment encryption, e.g. aes-xts-plain64
 }
 
 // PasswordSlots returns keyslots no token is bound to (passphrases or
@@ -43,6 +45,16 @@ func (h Header) PasswordSlots() []int {
 		}
 	}
 	return out
+}
+
+// HasRecovery reports a systemd recovery key slot (a passphrase too).
+func (h Header) HasRecovery() bool {
+	for _, t := range h.Tokens {
+		if t.Type == "systemd-recovery" && len(t.Keyslots) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // FIDO2 returns the systemd-fido2 tokens.
@@ -59,8 +71,15 @@ func (h Header) FIDO2() []Token {
 // ParseHeader parses `cryptsetup luksDump --dump-json-metadata`.
 func ParseHeader(b []byte) (Header, error) {
 	var doc struct {
-		Keyslots map[string]json.RawMessage `json:"keyslots"`
-		Tokens   map[string]struct {
+		Keyslots map[string]struct {
+			KDF struct {
+				Type string `json:"type"`
+			} `json:"kdf"`
+		} `json:"keyslots"`
+		Segments map[string]struct {
+			Encryption string `json:"encryption"`
+		} `json:"segments"`
+		Tokens map[string]struct {
 			Type       string   `json:"type"`
 			Keyslots   []string `json:"keyslots"`
 			Credential string   `json:"fido2-credential"`
@@ -95,12 +114,15 @@ func ParseHeader(b []byte) (Header, error) {
 			bySlot[s] = &h.Tokens[i]
 		}
 	}
-	for id := range doc.Keyslots {
+	for id, ks := range doc.Keyslots {
 		n, err := strconv.Atoi(id)
 		if err != nil {
 			return Header{}, fmt.Errorf("bad keyslot id %q", id)
 		}
-		h.Slots = append(h.Slots, Slot{ID: n, Token: bySlot[n]})
+		h.Slots = append(h.Slots, Slot{ID: n, Token: bySlot[n], KDF: ks.KDF.Type})
+	}
+	if seg, ok := doc.Segments["0"]; ok {
+		h.Cipher = seg.Encryption
 	}
 	sort.Slice(h.Slots, func(i, j int) bool { return h.Slots[i].ID < h.Slots[j].ID })
 	return h, nil

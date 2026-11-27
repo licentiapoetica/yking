@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/licentiapoetica/yking/internal/deps"
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/pgp"
@@ -64,6 +65,7 @@ type scanDoneMsg struct {
 	sshKeys  []sshkey.PubKey
 	coverage map[string]bool
 	stale    string // /usr/local/bin/yking differs from this build: both times
+	deps     []deps.Problem
 	err      error
 }
 
@@ -104,6 +106,7 @@ type model struct {
 	coverage       map[string]bool // serial → PAM credential confirmed
 	sshKeys        []sshkey.PubKey // security-key pubkeys in ~/.ssh
 	stale          string          // installed yking differs from this build: both times
+	deps           []deps.Problem  // missing tools and services
 
 	// loading screen
 	scanCh  <-chan tea.Msg    // the scan whose steps scanLog shows
@@ -184,7 +187,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanDoneMsg:
 		m.scanning = false
 		m.rep, m.kr, m.sshKeys, m.coverage, m.err = msg.rep, msg.kr, msg.sshKeys, msg.coverage, msg.err
-		m.stale = msg.stale
+		m.stale, m.deps = msg.stale, msg.deps
 		if m.rep != nil && m.cursor >= len(m.rep.Keys) {
 			m.cursor = 0
 		}
@@ -487,7 +490,10 @@ func (m model) screen(height int) (string, string) {
 		help = "1 keys · p PAM · u plug actions · b disk · D done · esc back"
 	case modeLUKS:
 		b.WriteString(m.luks.view())
-		help = "e enroll · ←→ unlock · m switch boot · s status · R repair · esc back"
+		help = "e enroll · ←→ unlock · m switch boot · P remove passphrase · H header backup · s status · R repair · esc back"
+		if m.luks.asking {
+			help = "enter back up · esc cancel"
+		}
 	case modeDoctor:
 		b.WriteString(m.doctor.view(height))
 		help = "↑↓ scroll · r recheck · esc back"
@@ -520,8 +526,12 @@ func (m model) screen(height int) (string, string) {
 		case m.scanning:
 			b.WriteString(m.viewLoading())
 		case m.err != nil:
+			b.WriteString(depsView(m.deps))
 			b.WriteString(errStyle.Render("Error: "+m.err.Error()) + "\n")
 		default:
+			if len(m.deps) > 0 {
+				b.WriteString(depsView(m.deps) + "\n")
+			}
 			if m.stale != "" {
 				b.WriteString(warnStyle.Render("! installed yking is outdated ("+m.stale+") — U to update") + "\n\n")
 			}

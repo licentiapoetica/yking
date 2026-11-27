@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/licentiapoetica/yking/internal/deps"
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/pam"
@@ -52,12 +53,50 @@ func runScan(cfg Config, ch chan tea.Msg) {
 		return
 	}
 	step(detect.Progress{Step: "keyring", Text: registered(len(kr.Keys)), Done: true})
+	step(detect.Progress{Step: "tools", Text: "checking tools and services"})
+	missing := checkDeps(kr)
+	step(detect.Progress{Step: "tools", Text: toolsText(missing), Done: true})
 	rep, err := detect.ScanProgress(context.Background(), cfg.Client, kr, step)
 	step(detect.Progress{Step: "local", Text: "checking SSH keys and PAM credentials"})
 	sk, _ := sshkey.ScanSK(sshDir())
 	mp, _, _ := readMapping()
 	cov := pam.Coverage(kr, mp, currentUser())
-	ch <- scanDoneMsg{rep: rep, kr: kr, sshKeys: sk, coverage: cov, stale: installedStale(), err: err}
+	ch <- scanDoneMsg{rep: rep, kr: kr, sshKeys: sk, coverage: cov, stale: installedStale(), deps: missing, err: err}
+}
+
+// checkDeps looks for missing tools and services. OTP access only matters
+// once a key holds a KeePassXC secret.
+func checkDeps(kr *keyring.Keyring) []deps.Problem {
+	var otp func() string
+	for _, k := range kr.Keys {
+		if k.HMAC != nil {
+			otp = otpCheck
+		}
+	}
+	return deps.Check(deps.Local(func() bool { return pam.ModuleExists("pam_u2f.so") }, otp))
+}
+
+func toolsText(ps []deps.Problem) string {
+	if len(ps) == 0 {
+		return "tools and services present"
+	}
+	return fmt.Sprintf("%d tool/service problem(s)", len(ps))
+}
+
+// depsView lists what is missing and the commands that fix it.
+func depsView(ps []deps.Problem) string {
+	var b strings.Builder
+	for _, p := range ps {
+		style := dimStyle
+		if p.Required {
+			style = warnStyle
+		}
+		b.WriteString(style.Render("! "+p.What) + dimStyle.Render(" — "+p.For) + "\n")
+	}
+	for _, f := range deps.Fixes(ps) {
+		b.WriteString("  " + selStyle.Render(f) + "\n")
+	}
+	return b.String()
 }
 
 func registered(n int) string {

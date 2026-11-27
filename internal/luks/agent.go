@@ -57,8 +57,18 @@ var ErrSecondRequest = errors.New("a second or unexpected password request came;
 // that is not about a PIN) calls kill and ends with ErrSecondRequest.
 // Returns nil when ctx ends normally (process finished).
 func AnswerPINOnce(ctx context.Context, pid int, secret []byte, kill func(), refuseAll bool) error {
+	if refuseAll {
+		return AnswerPINs(ctx, pid, nil, kill)
+	}
+	return AnswerPINs(ctx, pid, [][]byte{secret}, kill)
+}
+
+// AnswerPINs answers the n-th PIN request of pid with secrets[n]; one more
+// request (a wrong PIN asked again) or one not about a PIN calls kill and
+// ends with ErrSecondRequest. Used when one key unlocks and another enrolls.
+func AnswerPINs(ctx context.Context, pid int, secrets [][]byte, kill func()) error {
 	seen := map[string]bool{}
-	answered := false
+	answered := 0
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -78,15 +88,15 @@ func AnswerPINOnce(ctx context.Context, pid int, secret []byte, kill func(), ref
 			}
 			seen[f] = true
 			isPIN := strings.Contains(strings.ToLower(r.Message), "pin")
-			if refuseAll || answered || !isPIN || filepath.Dir(filepath.Clean(r.Socket)) != filepath.Clean(AskDir) {
+			if answered >= len(secrets) || !isPIN || filepath.Dir(filepath.Clean(r.Socket)) != filepath.Clean(AskDir) {
 				kill()
 				return ErrSecondRequest
 			}
-			if err := send(r.Socket, append([]byte("+"), secret...)); err != nil {
+			if err := send(r.Socket, append([]byte("+"), secrets[answered]...)); err != nil {
 				kill()
 				return err
 			}
-			answered = true
+			answered++
 		}
 	}
 }

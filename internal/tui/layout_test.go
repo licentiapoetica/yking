@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
+	"github.com/licentiapoetica/yking/internal/deps"
 	"github.com/licentiapoetica/yking/internal/detect"
 	"github.com/licentiapoetica/yking/internal/keyring"
 	"github.com/licentiapoetica/yking/internal/pgp"
@@ -124,5 +125,19 @@ func TestMouseWheelScrolls(t *testing.T) {
 	m = send(t, m, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.mode != modePGP {
 		t.Fatal("click changed the screen")
+	}
+}
+
+func TestMissingToolsShown(t *testing.T) {
+	m := keysModel(t, 120, 40)
+	m = send(t, m, scanDoneMsg{rep: m.rep, kr: m.kr, deps: []deps.Problem{
+		{What: "pcscd not running", For: "smart-card access", Required: true, Fix: "sudo systemctl enable --now pcscd.socket"},
+		{What: "gpg missing", For: "PGP", Fix: "sudo pacman -S --needed gnupg"},
+	}})
+	v := ansi.Strip(m.View())
+	for _, want := range []string{"! pcscd not running — smart-card access", "! gpg missing — PGP", "sudo pacman -S --needed gnupg", "sudo systemctl enable --now pcscd.socket"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("missing %q:\n%s", want, v)
+		}
 	}
 }

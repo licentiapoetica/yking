@@ -5,10 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -104,25 +102,8 @@ func (m model) openKeePass() (tea.Model, tea.Cmd) {
 }
 
 // otpCheck is otpAccess on this machine (tests replace it).
-var otpCheck = func() string { return otpAccess(fido.DefaultSysRoot, "/dev") }
+var otpCheck = func() string { return fido.OTPAccess(fido.DefaultSysRoot, "/dev") }
 
-// otpAccess says why the YubiKey OTP interface cannot be used ("" = ok):
-// ykman computes challenge-response over USB only there.
-func otpAccess(sysRoot, devRoot string) string {
-	nodes, err := fido.YubicoOTPNodes(sysRoot)
-	switch {
-	case err != nil:
-		return err.Error()
-	case len(nodes) == 0:
-		return "no YubiKey OTP interface found"
-	}
-	for _, n := range nodes {
-		if syscall.Access(filepath.Join(devRoot, n), 6) != nil { // read+write
-			return "OTP interface not accessible (/dev/" + n + ")"
-		}
-	}
-	return ""
-}
 
 // kpRead re-reads the plugged keys (they are swapped while this screen is
 // open); never while a write runs.

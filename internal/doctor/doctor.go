@@ -3,6 +3,7 @@ package doctor
 
 import (
 	"fmt"
+	"github.com/licentiapoetica/yking/internal/deps"
 	"io/fs"
 	"sort"
 	"strings"
@@ -79,6 +80,7 @@ type Inputs struct {
 	Tests           map[string]time.Time // serial → last key test
 	BootPending     string               // id of an interrupted boot change
 	PolkitAsksRoot  bool
+	Deps            []deps.Problem // missing tools and services
 }
 
 // TestEvery is how often every key — especially the one in the drawer —
@@ -96,6 +98,18 @@ func Run(in Inputs) []Finding {
 		kr = keyring.New()
 	}
 	cov := pam.Coverage(kr, in.Mapping, in.User)
+
+	// --- tools
+	for _, p := range in.Deps {
+		sev := Warn
+		if p.Required {
+			sev = Error
+		}
+		add(sev, "TOOLS", p.What+" — "+p.For, p.Fix)
+	}
+	if len(in.Deps) == 0 {
+		add(OK, "TOOLS", "tools and services present", "")
+	}
 
 	// --- keys
 	switch n := len(kr.Keys); {

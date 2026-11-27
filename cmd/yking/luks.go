@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,11 +25,17 @@ import (
 // cmdLUKS: yking luks status|enroll
 func cmdLUKS(c *ykman.Client, krPath string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: yking luks status | enroll [--device DEV] [--unlock pin+touch|touch] | migrate [--dry-run] | repair | identify [--record] | wipe --slot N[,M…] [--device DEV]")
+		return errors.New("usage: yking luks status | enroll [--device DEV] [--unlock pin+touch|touch] | migrate [--dry-run] | repair | identify [--record] | wipe --slot N[,M…] [--device DEV] | passphrase remove | backup [--device DEV] [--out DIR]")
 	}
 	if !elevate.IsRoot() {
 		return elevate.Reexec(append([]string{"--keyring", krPath, "luks"}, args...)...)
 	}
+	// Whatever happened, leave the current slot lists for the TUI.
+	defer func() {
+		if vols, err := luks.Volumes(); err == nil {
+			luks.TakeSnapshot(vols, time.Now())
+		}
+	}()
 	switch args[0] {
 	case "status":
 		return luksStatus(krPath)
@@ -36,11 +44,21 @@ func cmdLUKS(c *ykman.Client, krPath string, args []string) error {
 	case "repair":
 		return luksRepair()
 	case "wipe":
-		return luksWipe(krPath, args[1:])
+		return luksWipe(c, krPath, args[1:])
 	case "identify":
 		return luksIdentify(c, krPath, len(args) > 1 && args[1] == "--record")
 	case "migrate":
 		return luksMigrate(len(args) > 1 && args[1] == "--dry-run")
+	case "backup":
+		return luksBackup(args[1:])
+	case "passphrase":
+		switch {
+		case len(args) == 2 && args[1] == "remove":
+			return luksPassphraseRemove(c, krPath, "")
+		case len(args) == 4 && args[1] == "remove" && args[2] == "--tui":
+			return luksPassphraseRemove(c, krPath, args[3])
+		}
+		return errors.New("usage: yking luks passphrase remove")
 	}
 	return fmt.Errorf("unknown luks command %q", args[0])
 }
@@ -94,6 +112,8 @@ func luksStatus(krPath string) error {
 			switch {
 			case s.Token == nil:
 				fmt.Printf("   slot %d: passphrase / key file\n", s.ID)
+			case s.Token.Type == "systemd-recovery":
+				fmt.Printf("   slot %d: recovery key\n", s.ID)
 			case s.Token.Type == "systemd-fido2":
 				who := owner[fmt.Sprintf("%s/%d", v.UUID, s.ID)]
 				if who == "" {
@@ -121,144 +141,6 @@ func readSecret(tty *os.File, prompt string) ([]byte, error) {
 	b, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(tty)
 	return b, err
-}
-
-func luksEnroll(c *ykman.Client, krPath string, args []string) error {
-	fs := flag.NewFlagSet("luks enroll", flag.ExitOnError)
-	device := fs.String("device", "", "LUKS device (default: the one holding /)")
-	unlockS := fs.String("unlock", "pin+touch", "what unlocking needs: pin+touch or touch")
-	fs.Parse(args)
-	unlock, err := luks.ParseUnlock(*unlockS)
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-
-	v, err := rootVolume(*device)
-	if err != nil {
-		return err
-	}
-	if v.Version != 2 {
-		return fmt.Errorf("%s is LUKS%d; FIDO2 needs LUKS2", v.Device, v.Version)
-	}
-	before, err := luks.ReadHeader(v.Device)
-	if err != nil {
-		return err
-	}
-	if len(before.PasswordSlots()) == 0 {
-		return errors.New("no passphrase slot on " + v.Device + "; yking only adds FIDO2 next to a passphrase")
-	}
-
-	devs, err := fido.Devices(fido.DefaultSysRoot)
-	if err != nil {
-		return err
-	}
-	serials, err := c.ListSerials(ctx)
-	if err != nil {
-		return err
-	}
-	if len(devs) != 1 || len(serials) != 1 {
-		return fmt.Errorf("plug in exactly one key (now: %d FIDO device(s), serials %v)", len(devs), serials)
-	}
-	kr, err := keyring.Load(krPath)
-	if err != nil {
-		return err
-	}
-	k := kr.Find(serials[0])
-	if k == nil {
-		return fmt.Errorf("key %s is not registered in %s", serials[0], krPath)
-	}
-	for _, s := range k.LUKS {
-		if s.DeviceUUID == v.UUID {
-			for _, slot := range before.Slots {
-				if slot.ID == s.Keyslot && slot.Token != nil {
-					return fmt.Errorf("%q is already enrolled on %s (keyslot %d)", k.Label, v.Device, s.Keyslot)
-				}
-			}
-		}
-	}
-	f, err := c.FIDOInfo(ctx, serials[0])
-	if err != nil {
-		return err
-	}
-	if unlock.PIN() {
-		if ok, why := f.PINPromptAllowed(); !ok {
-			return errors.New(why)
-		}
-	}
-
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return errors.New("needs a terminal for the passphrase and PIN prompts")
-	}
-	defer tty.Close()
-	fmt.Fprintf(tty, "Enrolling key %q (%s) into %s (%s) — unlock: %s.\n", k.Label, k.Serial, v.Device, v.Mapper, unlock)
-	fmt.Fprintf(tty, "The passphrase slot stays. Nothing is stored on the key (non-resident credential).\n\n")
-
-	backup, err := luks.BackupHeader(v.Device, v.UUID, time.Now())
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(tty, "LUKS header backed up to %s\n\n", backup)
-
-	pass, err := readSecret(tty, "Current LUKS passphrase of "+v.Device+": ")
-	if err != nil || len(pass) == 0 {
-		return errors.New("no passphrase entered")
-	}
-	defer luks.Wipe(pass)
-	fmt.Fprintln(tty, "Checking the passphrase…")
-	if err := luks.TestPassphrase(v.Device, pass); err != nil {
-		return err // no PIN attempt used
-	}
-
-	var pin []byte
-	if unlock.PIN() {
-		fmt.Fprintf(tty, "FIDO2 PIN of %q — %d tries left. Asked ONCE; a wrong PIN stops here.\n", k.Label, f.PINRetries)
-		pin, err = readSecret(tty, "PIN: ")
-		if err != nil {
-			return err
-		}
-		defer luks.Wipe(pin)
-		if len([]rune(string(pin))) < max(f.MinPINLength, 4) {
-			return errors.New("PIN too short; not sent (no attempt used)")
-		}
-	}
-
-	eargs, err := luks.EnrollArgs(v.Device, devs[0], unlock)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(tty, "\n>>> Touch the key when it blinks (creating the credential always needs one touch). <<<")
-	if err := luks.RunEnroll(eargs, pass, pin, tty); err != nil {
-		return fmt.Errorf("%w (if the PIN was wrong, one attempt was used; the LUKS header is unchanged or backed up at %s)", err, backup)
-	}
-	after, err := luks.ReadHeader(v.Device)
-	if err != nil {
-		return err
-	}
-	tok, err := luks.NewFIDO2Token(before, after)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(tty, "\nEnrolled: keyslot %d (token %d). Passphrase slot(s) %v kept.\n", tok.Keyslots[0], tok.ID, after.PasswordSlots())
-
-	slot := keyring.LUKSSlot{DeviceUUID: v.UUID, Mapper: v.Mapper, Keyslot: tok.Keyslots[0], Token: tok.ID,
-		PINRequired: tok.PINRequired, UPRequired: tok.UPRequired, EnrolledAt: time.Now().UTC().Truncate(time.Second)}
-	p, err := luks.RecordPlan(krPath, k.Serial, slot, time.Now())
-	if err != nil {
-		return fmt.Errorf("enrolled, but recording failed: %w", err)
-	}
-	m, err := targets.Applier().Apply(p)
-	if err != nil {
-		return fmt.Errorf("enrolled, but recording failed: %w", err)
-	}
-	fmt.Fprintf(tty, "Recorded in the keyring (%s).\n", m.ID)
-	fmt.Fprint(tty, "\n"+bootInstructions)
-	if b := luks.DiscoverBoot(); b.Method == "encrypt" {
-		fmt.Fprintln(tty, "\nNote: boot still uses the old \"encrypt\" hook, which ignores FIDO2 — the passphrase keeps working as before.")
-		fmt.Fprintln(tty, "To unlock with the key at boot, switch the initramfs next (yking luks migrate).")
-	}
-	return nil
 }
 
 // luksMigrate switches boot to the systemd initramfs so enrolled FIDO2 keys
@@ -444,7 +326,7 @@ func luksIdentify(c *ykman.Client, krPath string, record bool) error {
 // touches a passphrase slot, refuses slots recorded for a registered key
 // (unless --recorded-too), and keeps at least one FIDO2 slot and one
 // passphrase slot. The header is backed up first.
-func luksWipe(krPath string, args []string) error {
+func luksWipe(c *ykman.Client, krPath string, args []string) error {
 	fs := flag.NewFlagSet("luks wipe", flag.ExitOnError)
 	device := fs.String("device", "", "LUKS device (default: the one holding /)")
 	slotsS := fs.String("slot", "", "comma-separated keyslots to remove")
@@ -470,6 +352,9 @@ func luksWipe(krPath string, args []string) error {
 			}
 		}
 	}
+	if len(h.PasswordSlots()) == 0 && !h.HasRecovery() {
+		return luksWipeWithKey(c, v, h, owner, *slotsS, *recordedToo)
+	}
 	wipe, err := luks.WipeSelection(h, *slotsS, owner, *recordedToo)
 	if err != nil {
 		return err
@@ -486,7 +371,7 @@ func luksWipe(krPath string, args []string) error {
 		return err
 	}
 	fmt.Fprintf(tty, "LUKS header backed up to %s\n", backup)
-	pass, err := readSecret(tty, "Current LUKS passphrase of "+v.Device+": ")
+	pass, err := readSecret(tty, "Current LUKS passphrase or recovery key of "+v.Device+": ")
 	if err != nil || len(pass) == 0 {
 		return errors.New("no passphrase entered")
 	}
@@ -509,5 +394,121 @@ func luksWipe(krPath string, args []string) error {
 		}
 	}
 	fmt.Fprintf(tty, "Removed. Remaining: passphrase %v, FIDO2 slots %d.\n", after.PasswordSlots(), len(after.FIDO2()))
+	return nil
+}
+
+// luksBackup saves the LUKS header (keyslots and metadata, no data) in
+// yking's folder and, with --out, also in a folder off this disk: a damaged
+// header can only be restored from a copy the locked disk does not hold.
+func luksBackup(args []string) error {
+	fs := flag.NewFlagSet("luks backup", flag.ExitOnError)
+	device := fs.String("device", "", "LUKS device (default: the one holding /)")
+	out := fs.String("out", "", "also copy it into this folder (e.g. on a USB stick)")
+	fs.Parse(args)
+	v, err := rootVolume(*device)
+	if err != nil {
+		return err
+	}
+	path, err := luks.BackupHeader(v.Device, v.UUID, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := luks.VerifyHeaderBackup(path, v.UUID); err != nil {
+		return err
+	}
+	fmt.Printf("Header of %s saved: %s\n", v.Device, path)
+	if *out == "" {
+		if luks.SameFilesystem(path, "/") && v.Root {
+			fmt.Println("! This copy is on the encrypted disk itself; keep one elsewhere too (--out).")
+		}
+		return nil
+	}
+	uid, gid := -1, -1 // the copy belongs to the user who ran sudo
+	if n, err := strconv.Atoi(os.Getenv("SUDO_UID")); err == nil {
+		uid = n
+	}
+	if n, err := strconv.Atoi(os.Getenv("SUDO_GID")); err == nil {
+		gid = n
+	}
+	dst, err := luks.CopyHeaderBackup(path, *out, uid, gid)
+	if err != nil {
+		return err
+	}
+	if err := luks.VerifyHeaderBackup(dst, v.UUID); err != nil {
+		return err
+	}
+	fmt.Printf("Copied and verified: %s\n", dst)
+	if luks.SameFilesystem(dst, "/") && v.Root {
+		fmt.Println("! That folder is on the encrypted disk itself; put a copy on another medium too.")
+	}
+	return nil
+}
+
+// luksWipeWithKey removes FIDO2 slots from a disk without passphrase: the
+// one plugged-in enrolled key opens it (its PIN asked once).
+func luksWipeWithKey(c *ykman.Client, v luks.Volume, h luks.Header, owner map[int]string, list string, recordedToo bool) error {
+	ctx := context.Background()
+	devs, err := fido.Devices(fido.DefaultSysRoot)
+	if err != nil {
+		return err
+	}
+	serials, err := c.ListSerials(ctx)
+	if err != nil {
+		return err
+	}
+	if len(devs) != 1 || len(serials) != 1 {
+		return fmt.Errorf("no passphrase on %s: plug in exactly one enrolled key to open it (now: %d FIDO device(s))", v.Device, len(devs))
+	}
+	authDev, tok, err := enrolledDevice(ctx, devs, h)
+	if err != nil {
+		return err
+	}
+	wipe, err := luks.WipeSelectionWithKey(h, list, owner, recordedToo, tok.Keyslots[0])
+	if err != nil {
+		return err
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return errors.New("needs a terminal for the PIN prompt")
+	}
+	defer tty.Close()
+	name := owner[tok.Keyslots[0]]
+	if name == "" {
+		name = "the plugged-in key"
+	}
+	fmt.Fprintf(tty, "Removing FIDO2 keyslot(s) %v from %s (%s), opened by %s (slot %d).\n", wipe, v.Device, v.Mapper, name, tok.Keyslots[0])
+	backup, err := luks.BackupHeader(v.Device, v.UUID, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(tty, "LUKS header backed up to %s\n", backup)
+	var pin []byte
+	if tok.PINRequired {
+		f, err := c.FIDOInfo(ctx, serials[0])
+		if err != nil {
+			return err
+		}
+		if ok, why := f.PINPromptAllowed(); !ok {
+			return errors.New(why)
+		}
+		if pin, err = readSecret(tty, fmt.Sprintf("FIDO2 PIN of %s (%d tries left, asked once): ", name, f.PINRetries)); err != nil {
+			return err
+		}
+		defer luks.Wipe(pin)
+	}
+	fmt.Fprintln(tty, "Touch the key when it blinks.")
+	if err := luks.RunWipeWithKey(v.Device, authDev, wipe, pin, tty); err != nil {
+		return fmt.Errorf("%w (header backup: %s)", err, backup)
+	}
+	after, err := luks.ReadHeader(v.Device)
+	if err != nil {
+		return err
+	}
+	for _, sl := range after.Slots {
+		if slices.Contains(wipe, sl.ID) {
+			return fmt.Errorf("slot %d is still there; header backup: %s", sl.ID, backup)
+		}
+	}
+	fmt.Fprintf(tty, "Removed. FIDO2 slots left: %d.\n", len(after.FIDO2()))
 	return nil
 }
