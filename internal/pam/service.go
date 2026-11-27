@@ -30,19 +30,24 @@ type Service struct {
 	Desc string
 	// LoginPath services count for "a password still gets you in".
 	LoginPath bool
+	// LockScreen services start authenticating the moment the screen locks
+	// — often right after the key was pulled. Without pam_u2f's
+	// "interactive" option they fail at once and (KDE) never prompt again:
+	// a hard lockout. yking always sets "interactive" for them.
+	LockScreen bool
 }
 
 // Known services, in display order. Only those present are shown.
 var Known = []Service{
-	{"sudo", "sudo (admin commands in a terminal)", true},
-	{"sddm", "SDDM login screen", true},
-	{"kde", "KDE lock screen", false},
-	{"polkit-1", "admin prompts in the desktop (polkit)", false},
-	{"login", "text console login (Ctrl+Alt+F2…)", true},
-	{"systemd-run0", "run0 (systemd's sudo)", false},
-	{"gdm-password", "GDM login screen", true},
-	{"lightdm", "LightDM login screen", true},
-	{"cinnamon-screensaver", "Cinnamon lock screen", false},
+	{"sudo", "sudo (admin commands in a terminal)", true, false},
+	{"sddm", "SDDM login screen", true, false},
+	{"kde", "KDE lock screen", false, true},
+	{"polkit-1", "admin prompts in the desktop (polkit)", false, false},
+	{"login", "text console login (Ctrl+Alt+F2…)", true, false},
+	{"systemd-run0", "run0 (systemd's sudo)", false, false},
+	{"gdm-password", "GDM login screen", true, false},
+	{"lightdm", "LightDM login screen", true, false},
+	{"cinnamon-screensaver", "Cinnamon lock screen", false, true},
 }
 
 // State is one service as found on disk.
@@ -125,8 +130,25 @@ func discover(svc Service, etcDir, vendorDir string) (State, bool, error) {
 	return st, true, nil
 }
 
+// Effective is cfg with the settings yking always enforces for the
+// service (lock screens: interactive).
+func (s State) Effective(cfg Config) Config {
+	if s.Service.LockScreen && cfg.Mode != ModeOff {
+		cfg.Interactive = true
+	}
+	return cfg
+}
+
+// LockoutRisk reports a lock screen that needs the key but fails at once
+// when the key is absent (no "interactive"): it can never be unlocked
+// after the key was pulled.
+func (s State) LockoutRisk() bool {
+	return s.Service.LockScreen && s.Custom == "" && s.Current.Mode != ModeOff && !s.Current.Interactive
+}
+
 // Render returns the new file content for cfg.
 func (s State) Render(cfg Config) (string, error) {
+	cfg = s.Effective(cfg)
 	lines, err := Apply(s.base, cfg)
 	if err != nil {
 		return "", err

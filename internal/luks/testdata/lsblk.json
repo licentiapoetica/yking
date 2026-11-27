@@ -1,0 +1,58 @@
+{
+   "blockdevices": [
+      {
+         "name": "vda",
+         "kname": "vda",
+         "type": "disk",
+         "fstype": null,
+         "fsver": null,
+         "uuid": null,
+         "mountpoints": [],
+         "children": [
+            {
+               "name": "vda1",
+               "kname": "vda1",
+               "type": "part",
+               "fstype": "vfat",
+               "fsver": "FAT32",
+               "uuid": "F5D9-2456",
+               "mountpoints": [
+                   "/boot"
+               ]
+            },{
+               "name": "vda2",
+               "kname": "vda2",
+               "type": "part",
+               "fstype": "crypto_LUKS",
+               "fsver": "2",
+               "uuid": "479e17f9-090b-47e0-ac64-6aa013bfb3fc",
+               "mountpoints": [],
+               "children": [
+                  {
+                     "name": "cryptroot",
+                     "kname": "dm-0",
+                     "type": "crypt",
+                     "fstype": "LVM2_member",
+                     "fsver": "LVM2 001",
+                     "uuid": "Sg7pig-t8tI-lf69-8T76-0rbY-ftf2-gx3O0d",
+                     "mountpoints": [],
+                     "children": [
+                        {
+                           "name": "vgcrypt-archcrypt",
+                           "kname": "dm-1",
+                           "type": "lvm",
+                           "fstype": "ext4",
+                           "fsver": "1.0",
+                           "uuid": "e59ee7a6-d300-4bdf-92d1-bc00740db7e9",
+                           "mountpoints": [
+                               "/"
+                           ]
+                        }
+                     ]
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

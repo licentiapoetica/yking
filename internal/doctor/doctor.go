@@ -44,6 +44,7 @@ type File struct {
 // Events describes the plug/unplug installation.
 type Events struct {
 	Configured      bool
+	LockOnRemove    bool
 	BinaryInstalled bool
 	BinaryCurrent   bool
 	RuleExists      bool
@@ -76,6 +77,7 @@ type Inputs struct {
 	Untracked       []sshkey.PubKey
 	Connected       []detect.KeyReport
 	Tests           map[string]time.Time // serial → last key test
+	BootPending     string               // id of an interrupted boot change
 }
 
 // TestEvery is how often every key — especially the one in the drawer —
@@ -273,6 +275,28 @@ func Run(in Inputs) []Finding {
 	for _, r := range kr.Revoked {
 		for _, l := range r.Leftovers {
 			add(Warn, "SSH", fmt.Sprintf("revoked key %q: %s is still on %s", r.Label, l.Comment, l.Host), "remove that line from the server's authorized_keys")
+		}
+	}
+
+	// --- interrupted boot change
+	if in.BootPending != "" {
+		add(Error, "BOOT", "boot change "+in.BootPending+" was interrupted before the images were rebuilt and verified", "sudo yking luks repair — before rebooting")
+	}
+
+	// --- lock screen lockout
+	for _, st := range in.PAM {
+		if !st.LockoutRisk() {
+			continue
+		}
+		sev, msg := Warn, st.Service.Desc+" fails at once when the key is not plugged in (no pam_u2f \"interactive\")"
+		if in.Events.Configured && in.Events.LockOnRemove {
+			sev, msg = Error, st.Service.Desc+" + \"lock when the key is pulled\" = you cannot unlock after pulling the key (the lock screen never prompts again)"
+		}
+		add(sev, "PAM", msg, "PAM screen (p) → Enter → apply: yking adds \"interactive\". Way out meanwhile: Ctrl+Alt+F2, log in, loginctl unlock-sessions")
+	}
+	for _, st := range in.PAM {
+		if st.Service.LockScreen && st.Current.Mode == pam.ModeOnly && !st.LockoutRisk() {
+			add(Info, "PAM", st.Service.Desc+" is key only", "if it ever refuses: Ctrl+Alt+F2, log in, loginctl unlock-sessions")
 		}
 	}
 

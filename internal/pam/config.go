@@ -72,6 +72,9 @@ func (u Unlock) args() []string {
 type Config struct {
 	Mode   Mode
 	Unlock Unlock
+	// Interactive makes pam_u2f prompt "Insert your FIDO authenticator,
+	// then press ENTER." and wait, instead of failing when no key is there.
+	Interactive bool
 	// Extra are pam_u2f arguments yking does not interpret (kept verbatim
 	// when taking over a hand-written line), e.g. authfile=…
 	Extra []string
@@ -93,9 +96,16 @@ func (c Config) lines() []Line {
 	}
 	control := map[Mode]string{ModeOr: "sufficient", ModeAnd: "required", ModeOnly: "[success=done default=die]"}[c.Mode]
 	args := append(c.Unlock.args(), "cue")
+	if c.Interactive {
+		args = append(args, "interactive")
+	}
 	args = append(args, c.Extra...)
 	rule := fmt.Sprintf("auth %s pam_u2f.so %s", control, strings.Join(args, " "))
-	marker := fmt.Sprintf("%s (mode=%s unlock=%s) — change it with yking", markerPrefix, c.Mode.tag(), c.Unlock.tag())
+	extraTag := ""
+	if c.Interactive {
+		extraTag = " interactive"
+	}
+	marker := fmt.Sprintf("%s (mode=%s unlock=%s%s) — change it with yking", markerPrefix, c.Mode.tag(), c.Unlock.tag(), extraTag)
 	l, _ := parseRule(rule)
 	l.Raw = rule
 	return []Line{{Raw: marker, Comment: true}, l}
@@ -131,7 +141,7 @@ func Classify(lines []Line) (cfg Config, ok bool, why string) {
 	if l.Type != "auth" || l.Optional {
 		return cfg, false, "pam_u2f line is not a plain auth rule"
 	}
-	cfg.Unlock, cfg.Extra = classifyArgs(l.Args)
+	cfg.Unlock, cfg.Interactive, cfg.Extra = classifyArgs(l.Args)
 	before := firstAuth < 0 || u2f[0] < firstAuth
 	switch l.Control {
 	case "sufficient":
@@ -160,8 +170,8 @@ func Classify(lines []Line) (cfg Config, ok bool, why string) {
 	return cfg, true, ""
 }
 
-func classifyArgs(args []string) (Unlock, []string) {
-	pin, presence := false, true // pam_u2f defaults: no PIN, presence required
+func classifyArgs(args []string) (Unlock, bool, []string) {
+	pin, presence, interactive := false, true, false // pam_u2f defaults: no PIN, presence required
 	var extra []string
 	for _, a := range args {
 		switch a {
@@ -173,6 +183,8 @@ func classifyArgs(args []string) (Unlock, []string) {
 			presence = true
 		case "userpresence=0":
 			presence = false
+		case "interactive":
+			interactive = true
 		case "cue":
 		default:
 			extra = append(extra, a)
@@ -180,11 +192,11 @@ func classifyArgs(args []string) (Unlock, []string) {
 	}
 	switch {
 	case pin && !presence:
-		return UnlockPIN, extra
+		return UnlockPIN, interactive, extra
 	case pin:
-		return UnlockPINTouch, extra
+		return UnlockPINTouch, interactive, extra
 	default:
-		return UnlockTouch, extra
+		return UnlockTouch, interactive, extra
 	}
 }
 

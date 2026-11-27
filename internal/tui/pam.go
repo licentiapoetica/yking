@@ -93,7 +93,8 @@ func (s pamScreen) changes() []pam.Change {
 			continue
 		}
 		want, cur := s.desired[i], st.Current
-		differs := !sameBehaviour(want, cur)
+		// A lock screen without "interactive" is always fixed (lockout risk).
+		differs := !sameBehaviour(want, cur) || (st.LockoutRisk() && want.Mode != pam.ModeOff)
 		adopt := s.takeover && !st.Managed && cur.Mode != pam.ModeOff && want.Mode != pam.ModeOff
 		if differs || adopt {
 			out = append(out, pam.Change{Service: st.Service.Name, To: want})
@@ -205,6 +206,9 @@ func (s pamScreen) view() string {
 		switch {
 		case st.Custom != "":
 			cur, next = "custom", errStyle.Render("not managed: "+st.Custom)
+		case st.LockoutRisk() && s.desired[i].Mode != pam.ModeOff:
+			next = warnStyle.Render(next + " + waits for the key")
+			tag = errStyle.Render(" ← fixes a lockout risk")
 		case sameBehaviour(s.desired[i], st.Current):
 			next = dimStyle.Render(next + " (unchanged)")
 			if s.takeover && !st.Managed && st.Current.Mode != pam.ModeOff {
@@ -231,7 +235,15 @@ func (s pamScreen) view() string {
 		b.WriteString(dimStyle.Render(" (now from " + cur.Source + ")"))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(modeHelp(s.desired[s.cursor].Mode)) + "\n\n")
+	b.WriteString(dimStyle.Render(modeHelp(s.desired[s.cursor].Mode)) + "\n")
+	if cur.Service.LockScreen && s.desired[s.cursor].Mode != pam.ModeOff {
+		b.WriteString(dimStyle.Render("Lock screen: yking adds pam_u2f \"interactive\" — it asks \"Insert your FIDO authenticator, then press ENTER\"\n"+
+			"instead of failing at once when the key is not plugged in (otherwise KDE never prompts again).") + "\n")
+	}
+	if cur.Service.LockScreen && s.desired[s.cursor].Mode == pam.ModeOnly {
+		b.WriteString(dimStyle.Render("Emergency exit if the lock screen ever refuses: Ctrl+Alt+F2, log in, `loginctl unlock-sessions`.") + "\n")
+	}
+	b.WriteString("\n")
 
 	take := "yes"
 	if !s.takeover {

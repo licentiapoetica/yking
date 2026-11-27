@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/licentiapoetica/yking/internal/elevate"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/targets"
 )
@@ -69,8 +72,23 @@ func applyAsRoot(path string, yes bool) error {
 			return fmt.Errorf("aborted")
 		}
 	}
+	changed := targets.PlanPaths(p)
+	boot := targets.BootCritical(changed)
+	if boot {
+		// From here until rebuild + verification are done, a dying terminal
+		// or Ctrl+C must not leave half-built boot images behind.
+		signal.Ignore(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+		defer signal.Reset(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+		fmt.Println("yking: boot files are being changed — this takes a minute and cannot be interrupted. Do not power off.")
+		if err := luks.SetPending(p.ID); err != nil {
+			return err
+		}
+	}
 	m, err := a.Apply(p)
 	if err != nil {
+		if boot {
+			luks.ClearPending() // Apply restores on failure; nothing half-done
+		}
 		return err
 	}
 	if targets.TouchesPAM(p) {
@@ -79,23 +97,59 @@ func applyAsRoot(path string, yes bool) error {
 			return err
 		}
 	}
-	runReloads(targets.PlanPaths(p))
+	if err := runReloads(changed); err == nil {
+		err = targets.Verify(changed)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "yking: verification failed: %v\n", err)
+		}
+		if err != nil && targets.BootCritical(changed) {
+			return bootRollback(a, m, err)
+		}
+	} else if targets.BootCritical(changed) {
+		return bootRollback(a, m, err)
+	}
+	if boot {
+		luks.ClearPending()
+	}
 	fmt.Printf("Applied %s. Undo with: yking rollback %s\n", m.ID, m.ID)
 	return nil
 }
 
-// runReloads runs the fixed reload commands for changed paths (udev rules,
-// systemd units). The commands come from yking, never from a plan.
-func runReloads(changed []string) {
+// bootRollback restores boot files after a failed rebuild/verification and
+// rebuilds again from the restored files.
+func bootRollback(a *plan.Applier, m *plan.Manifest, cause error) error {
+	fmt.Fprintln(os.Stderr, "yking: restoring the previous boot files and rebuilding…")
+	if _, err := a.Rollback(m.ID, true); err != nil {
+		return fmt.Errorf("%v; ROLLBACK FAILED: %v — backups in %s/%s", cause, err, a.BackupRoot, m.ID)
+	}
+	var changed []string
+	for _, e := range m.Entries {
+		changed = append(changed, e.Path)
+	}
+	if err := runReloads(changed); err != nil {
+		return fmt.Errorf("%v; files restored but rebuilding failed too: %v — do not reboot before fixing (yking luks repair)", cause, err)
+	}
+	luks.ClearPending()
+	return fmt.Errorf("%v — rolled back, boot is as before", cause)
+}
+
+// runReloads runs the fixed reload/rebuild commands for changed paths
+// (udev, systemd, mkinitcpio, GRUB). The commands come from yking, never
+// from a plan. Returns the first failure.
+func runReloads(changed []string) error {
+	var first error
 	for _, c := range targets.Reloads(changed) {
+		fmt.Printf("yking: running %s\n", strings.Join(c, " "))
 		cmd := exec.Command(c[0], c[1:]...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "yking: %s failed: %v\n", strings.Join(c, " "), err)
-		} else {
-			fmt.Printf("yking: ran %s\n", strings.Join(c, " "))
+			if first == nil {
+				first = fmt.Errorf("%s: %w", c[0], err)
+			}
 		}
 	}
+	return first
 }
 
 // cmdRollback: yking rollback [--force] [--yes] [ID]
@@ -157,7 +211,9 @@ func rollbackWith(a *plan.Applier, id string, force, yes bool) error {
 	for _, e := range m.Entries {
 		changed = append(changed, e.Path)
 	}
-	runReloads(changed)
+	if err := runReloads(changed); err != nil {
+		return fmt.Errorf("rolled back %s, but rebuilding failed: %w", id, err)
+	}
 	fmt.Printf("Rolled back %s.\n", id)
 	return nil
 }

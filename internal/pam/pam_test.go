@@ -392,3 +392,35 @@ func TestMappingRemove(t *testing.T) {
 		t.Errorf("empty user line not dropped: %q", m.String())
 	}
 }
+
+// Regression (host lockout 2026-11-27): lock screens always get
+// "interactive"; the hand-written key-only lock screen is a lockout risk.
+func TestLockScreenInteractive(t *testing.T) {
+	m := discoverMap(t)
+	kde := m["kde"]
+	if !kde.Service.LockScreen || !kde.LockoutRisk() {
+		t.Fatalf("this machine's key-only lock screen must be flagged: %+v", kde)
+	}
+	out, err := kde.Render(kde.Current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "pam_u2f.so pinverification=1 userpresence=0 cue interactive") {
+		t.Errorf("kde without interactive:\n%s", out)
+	}
+	ls, _ := Parse(out)
+	cfg, ok, _ := Classify(ls)
+	if !ok || !cfg.Interactive || len(cfg.Extra) != 0 {
+		t.Errorf("re-classified: %+v", cfg)
+	}
+	fixed := kde
+	fixed.Current = cfg
+	if fixed.LockoutRisk() {
+		t.Error("fixed lock screen still flagged")
+	}
+	// Non-lock-screen services do not get it.
+	sudo, _ := m["sudo"].Render(Config{Mode: ModeOnly, Unlock: UnlockPIN})
+	if strings.Contains(sudo, "interactive") {
+		t.Errorf("sudo got interactive:\n%s", sudo)
+	}
+}

@@ -12,11 +12,15 @@ import (
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/fsutil"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/plan"
 )
 
 // eventsScreen configures what happens when a YubiKey is plugged in or
 // pulled out, and installs the pieces (binary, config, udev rule, unit).
+
+// discoverPAM reads the PAM services (tests override it).
+var discoverPAM = func() ([]pam.State, error) { return pam.Discover(pam.EtcDir, pam.VendorDir) }
 
 // eventsConfigPath is read for the current settings (tests override it).
 var eventsConfigPath = events.ConfigPath
@@ -139,6 +143,17 @@ func (m model) buildEventsPlan() (tea.Model, tea.Cmd) {
 	if len(c.Triggers) == 0 && c.OnRemove.Lock {
 		s.err = "Tick at least one trigger key (otherwise pulling ANY registered key would lock)."
 		return m, nil
+	}
+	if c.OnRemove.Lock {
+		if sts, err := discoverPAM(); err == nil {
+			for _, st := range sts {
+				if st.LockoutRisk() {
+					s.err = fmt.Sprintf("Not enabling \"lock\": the %s needs the key but fails at once when it is absent —\n"+
+						"after pulling the key you could never unlock. Fix it first on the PAM screen (p): yking adds \"interactive\".", st.Service.Desc)
+					return m, nil
+				}
+			}
+		}
 	}
 	conf, err := c.Encode()
 	if err != nil {

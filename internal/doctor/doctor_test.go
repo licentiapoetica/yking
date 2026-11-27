@@ -94,6 +94,10 @@ func TestFindsProblems(t *testing.T) {
 			in.Keyring.Revoked = []keyring.RevokedKey{{Label: "old", Leftovers: []keyring.Leftover{{Comment: "yk-main-00", Host: "nas"}}}}
 		}, "still on nas", Warn},
 		"one key": {func(in *Inputs) { in.Keyring.Keys = in.Keyring.Keys[:1] }, "only one key registered", Warn},
+		"lockout combo": {func(in *Inputs) {
+			in.PAM = append(in.PAM, pam.State{Service: pam.Service{Name: "kde", Desc: "KDE lock screen", LockScreen: true}, Current: pam.Config{Mode: pam.ModeOnly}})
+			in.Events = Events{Configured: true, LockOnRemove: true, BinaryInstalled: true, BinaryCurrent: true, RuleExists: true, RuleCurrent: true, UnitExists: true, UnitCurrent: true}
+		}, "cannot unlock after pulling the key", Error},
 	}
 	for name, c := range cases {
 		in := baseInputs(t)

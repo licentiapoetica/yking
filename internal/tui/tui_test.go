@@ -512,9 +512,10 @@ func TestLinkFlow(t *testing.T) {
 }
 
 func TestEventsScreenDefaultsAndPlan(t *testing.T) {
-	old := eventsConfigPath
+	old, oldPAM := eventsConfigPath, discoverPAM
 	eventsConfigPath = filepath.Join(t.TempDir(), "none.toml") // as if not set up yet
-	defer func() { eventsConfigPath = old }()
+	discoverPAM = func() ([]pam.State, error) { return nil, nil }
+	defer func() { eventsConfigPath, discoverPAM = old, oldPAM }()
 	krPath := filepath.Join(t.TempDir(), "keyring.toml")
 	kr := keyring.New()
 	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
@@ -552,5 +553,31 @@ func TestEventsScreenDefaultsAndPlan(t *testing.T) {
 		if !strings.Contains(all, want) {
 			t.Errorf("plan missing %q:\n%s", want, all)
 		}
+	}
+}
+
+// Regression (host lockout 2026-11-27): "lock when the key is pulled" must be
+// refused while the lock screen is key-only without pam_u2f "interactive".
+func TestEventsRefuseLockWithLockoutRisk(t *testing.T) {
+	old, oldPAM := eventsConfigPath, discoverPAM
+	eventsConfigPath = filepath.Join(t.TempDir(), "none.toml")
+	risky := pam.State{Service: pam.Service{Name: "kde", Desc: "KDE lock screen", LockScreen: true}, Current: pam.Config{Mode: pam.ModeOnly}}
+	discoverPAM = func() ([]pam.State, error) { return []pam.State{risky}, nil }
+	defer func() { eventsConfigPath, discoverPAM = old, oldPAM }()
+
+	krPath := filepath.Join(t.TempDir(), "keyring.toml")
+	kr := keyring.New()
+	kr.Add("11111111", "daily", keyring.RoleDaily, t0())
+	kr.Save(krPath)
+	m := send(t, model{cfg: Config{KeyringPath: krPath}}, keyMsg("u"), keyMsg("enter"))
+	if m.mode != modeEvents || !strings.Contains(m.events.err, "never unlock") {
+		t.Fatalf("mode=%v err=%q", m.mode, m.events.err)
+	}
+	fixed := risky
+	fixed.Current.Interactive = true
+	discoverPAM = func() ([]pam.State, error) { return []pam.State{fixed}, nil }
+	m = send(t, m, keyMsg("enter"))
+	if m.mode != modeReview {
+		t.Fatalf("with interactive: mode=%v err=%q", m.mode, m.events.err)
 	}
 }

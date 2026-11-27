@@ -13,6 +13,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/fsutil"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/plan"
 	"github.com/licentiapoetica/yking/internal/sshkey"
@@ -74,13 +75,18 @@ func Gather(o Options) (Inputs, error) {
 		}
 	}
 
+	in.BootPending = luks.Pending()
 	in.PAM, _ = pam.Discover(pam.EtcDir, pam.VendorDir)
 	in.ModuleInstalled = pam.ModuleExists("pam_u2f.so")
 	in.PAMWrites = lastPAMWrites()
 
 	e := &in.Events
-	_, cerr := os.Stat(events.ConfigPath)
-	e.Configured = cerr == nil
+	if b, err := os.ReadFile(events.ConfigPath); err == nil {
+		e.Configured = true
+		if c, err := events.Parse(b); err == nil {
+			e.LockOnRemove = c.OnRemove.Lock
+		}
+	}
 	if inst, err := os.ReadFile(events.BinaryPath); err == nil {
 		e.BinaryInstalled = true
 		if self, err := os.ReadFile(o.Self); err == nil {

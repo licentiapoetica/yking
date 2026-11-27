@@ -10,6 +10,7 @@ import (
 
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/luks"
 	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/plan"
 )
@@ -22,7 +23,23 @@ func Default() []plan.Target {
 		{Dir: filepath.Dir(events.RulePath), Validate: events.ValidateRule},
 		{Dir: filepath.Dir(events.UnitPath), Validate: events.ValidateUnit},
 		{Dir: filepath.Dir(events.BinaryPath), Validate: events.ValidateBinary},
+		{Dir: "/etc", Validate: validateEtcFile},
+		{Dir: filepath.Dir(luks.GrubDefault), Validate: luks.ValidateGrubDefault},
+		{Dir: filepath.Dir(luks.GrubFallback), Validate: luks.ValidateFallbackScript},
+		{Dir: filepath.Dir(luks.ConsoleDropIn), Validate: luks.ValidateConsoleDropIn},
+		{Dir: filepath.Dir(luks.MkinitcpioDropIn), Validate: luks.ValidateMkinitcpioDropIn},
 	}
+}
+
+// validateEtcFile allows exactly two files directly in /etc.
+func validateEtcFile(path string, content []byte) error {
+	switch path {
+	case luks.MkinitcpioConf:
+		return luks.ValidateMkinitcpio(path, content)
+	case luks.Crypttab:
+		return luks.ValidateCrypttab(path, content)
+	}
+	return fmt.Errorf("yking does not write %s", path)
 }
 
 func validateYkingFile(path string, content []byte) error {
@@ -33,6 +50,8 @@ func validateYkingFile(path string, content []byte) error {
 	case "events.toml":
 		_, err := events.Parse(content)
 		return err
+	case "mkinitcpio-fallback.conf":
+		return luks.ValidateMkinitcpio(path, content)
 	default:
 		return fmt.Errorf("unknown yking config file %s", filepath.Base(path))
 	}
@@ -67,8 +86,14 @@ func Reloads(changed []string) [][]string {
 	if touches(changed, events.UnitPath) {
 		out = append(out, []string{"systemctl", "daemon-reload"})
 	}
-	return out
+	return append(out, luks.Rebuilds(changed)...)
 }
+
+// BootCritical reports whether a failed rebuild must roll the plan back.
+func BootCritical(changed []string) bool { return len(luks.Rebuilds(changed)) > 0 }
+
+// Verify runs the post-apply checks for what changed.
+func Verify(changed []string) error { return luks.VerifyBoot(changed) }
 
 func paths(p *plan.Plan) []string {
 	var out []string

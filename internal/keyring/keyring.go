@@ -82,8 +82,20 @@ type Key struct {
 	LastSeen   time.Time `toml:"last_seen,omitempty"`
 	LastTested time.Time `toml:"last_tested,omitempty"`
 
-	U2F []U2FCred `toml:"u2f,omitempty"`
-	SSH []SSHKey  `toml:"ssh,omitempty"`
+	U2F  []U2FCred  `toml:"u2f,omitempty"`
+	SSH  []SSHKey   `toml:"ssh,omitempty"`
+	LUKS []LUKSSlot `toml:"luks,omitempty"`
+}
+
+// LUKSSlot records a FIDO2 keyslot this key unlocks.
+type LUKSSlot struct {
+	DeviceUUID  string    `toml:"device_uuid"`
+	Mapper      string    `toml:"mapper,omitempty"`
+	Keyslot     int       `toml:"keyslot"`
+	Token       int       `toml:"token"`
+	PINRequired bool      `toml:"pin_required"`
+	UPRequired  bool      `toml:"up_required"`
+	EnrolledAt  time.Time `toml:"enrolled_at"`
 }
 
 // U2FCred records a pam_u2f mapping created by yking (public data only).
