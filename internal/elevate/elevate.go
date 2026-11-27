@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // IsRoot reports whether the process already has root.
@@ -27,6 +28,20 @@ func Self(args ...string) (*exec.Cmd, error) {
 		}
 	}
 	return nil, errors.New("need root to apply changes, but neither sudo nor pkexec is installed")
+}
+
+// SelfTUI is Self for the TUI: sudo gets -A, so its password or PIN
+// prompt goes to SUDO_ASKPASS (yking, which shows it in the TUI) instead of
+// a terminal. pkexec asks through the desktop's polkit agent.
+func SelfTUI(args ...string) (*exec.Cmd, error) {
+	cmd, err := Self(args...)
+	if err != nil || IsRoot() {
+		return cmd, err
+	}
+	if filepath.Base(cmd.Path) == "sudo" {
+		cmd.Args = append([]string{cmd.Args[0], "-A"}, cmd.Args[1:]...)
+	}
+	return cmd, nil
 }
 
 // Reexec runs this binary as root with args, attached to the terminal, and
