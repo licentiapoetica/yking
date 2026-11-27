@@ -12,6 +12,7 @@ import (
 	"github.com/licentiapoetica/yking/internal/elevate"
 	"github.com/licentiapoetica/yking/internal/events"
 	"github.com/licentiapoetica/yking/internal/keyring"
+	"github.com/licentiapoetica/yking/internal/pam"
 	"github.com/licentiapoetica/yking/internal/ykman"
 )
 
@@ -56,9 +57,21 @@ func cmdEvent(c *ykman.Client, krPath string, args []string) error {
 		return errors.New("yking event add|remove runs as root from yking-event@.service")
 	}
 	_, err = events.Handle(args[0], cfg, registered, events.Deps{
-		Serials:    func() ([]string, error) { return c.ListSerials(context.Background()) },
-		Sessions:   events.LoginctlSessions,
-		Lock:       events.LoginctlLock,
+		Serials:  func() ([]string, error) { return c.ListSerials(context.Background()) },
+		Sessions: events.LoginctlSessions,
+		Lock:     events.LoginctlLock,
+		LockBlocked: func() string {
+			sts, err := pam.Discover(pam.EtcDir, pam.VendorDir)
+			if err != nil {
+				return "cannot read PAM config: " + err.Error()
+			}
+			for _, st := range sts {
+				if st.LockoutRisk() {
+					return st.Path + " needs the key but lacks pam_u2f \"interactive\" (re-apply it in yking, p)"
+				}
+			}
+			return ""
+		},
 		Wake:       events.WakeScreen,
 		SudoReset:  events.ResetSudo,
 		StatePath:  filepath.Join(events.StateDir, "connected.json"),

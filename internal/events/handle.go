@@ -22,14 +22,17 @@ type Session struct {
 
 // Deps are the side effects, swappable for tests.
 type Deps struct {
-	Serials    func() ([]string, error) // connected YubiKeys
-	Sessions   func(users []string) ([]Session, error)
-	Lock       func(id string) error
-	Wake       func(user string) error
-	SudoReset  func(user string) error
-	StatePath  string
-	Log        func(format string, args ...any)
-	SettleWait time.Duration // before scanning on add (device still appearing)
+	Serials  func() ([]string, error) // connected YubiKeys
+	Sessions func(users []string) ([]Session, error)
+	Lock     func(id string) error
+	// LockBlocked returns why locking now would lock the user out (a lock
+	// screen that cannot prompt for an absent key); "" = safe. Nil = safe.
+	LockBlocked func() string
+	Wake        func(user string) error
+	SudoReset   func(user string) error
+	StatePath   string
+	Log         func(format string, args ...any)
+	SettleWait  time.Duration // before scanning on add (device still appearing)
 }
 
 // Result reports what Handle did (also logged).
@@ -100,7 +103,15 @@ func Handle(action string, cfg *Config, registered []string, d Deps) (*Result, e
 				}
 			}
 		}
-		if cfg.OnRemove.Lock {
+		lock := cfg.OnRemove.Lock
+		if lock && d.LockBlocked != nil {
+			if why := d.LockBlocked(); why != "" {
+				d.Log("remove: not locking: %s", why)
+				r.Actions = append(r.Actions, "lock-skipped")
+				lock = false
+			}
+		}
+		if lock {
 			ss, err := d.Sessions(cfg.Users)
 			if err != nil {
 				return r, fmt.Errorf("listing sessions: %w", err)

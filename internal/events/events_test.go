@@ -59,6 +59,22 @@ func TestRemoveTriggerLocks(t *testing.T) {
 	}
 }
 
+func TestRemoveSkipsLockWhenBlocked(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "connected.json")
+	f := &fake{serials: []string{daily}, sessions: []Session{{ID: "2", User: "alice", Type: "wayland"}}}
+	Handle("add", cfg(), registered, f.deps(state))
+	f.serials = nil
+	d := f.deps(state)
+	d.LockBlocked = func() string { return "lock screen not interactive" }
+	r, err := Handle("remove", cfg(), registered, d)
+	if err != nil || len(f.locked) != 0 || !slices.Contains(r.Actions, "lock-skipped") {
+		t.Fatalf("locked=%v r=%+v err=%v", f.locked, r, err)
+	}
+	if !slices.Equal(f.sudo, []string{"alice"}) {
+		t.Fatalf("sudo reset skipped: %v", f.sudo)
+	}
+}
+
 func TestRemoveWithoutStateFallsBack(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "connected.json")
 	f := &fake{serials: []string{daily}, sessions: []Session{{ID: "2", User: "alice", Type: "x11"}}}
