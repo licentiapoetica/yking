@@ -206,14 +206,53 @@ to
 .IR scdaemon.conf ,
 so gpg and ykman can share the key.
 .SH PIV
+PIV is a separate applet with its own PIN, PUK and slots, independent of
+FIDO2, OpenPGP and OTP. OpenPGP and PIV share the smart-card interface; with gpg running, apply
+.B f
+on the PGP screen first.
+.PP
+The screen lists each plugged-in key: PIN and PUK tries, management key
+algorithm,
+.B (PIN)
+when the management key is stored on the key, factory defaults still in
+place, and the used slots with algorithm, touch
+.RB ( \[u261D]
+= touch required), certificate subject and expiry.
+.TP
+.B 9a
+authentication (SSH, TLS client)
+.TQ
+.B 9c
+signing
+.TQ
+.B 9d
+decryption
+.TQ
+.B 9e
+card authentication, no PIN
+.TQ
+.BR 82 \(en 95
+20 retired key-management slots
+.PP
 .B c
 asks for everything first, then replaces each credential the key still
-reports as factory default: the PIN, the PUK, and the management key (a
-random one stored on the key, unlocked by the PIN). A PIN or PUK that was
-already changed is never touched. Values go to ykman on stdin. The PIN is
-asked only while at least 2 tries are left.
+reports as factory default:
+.TP
+PIN
+default 123456, 6\(en8 characters.
+.TQ
+PUK
+default 12345678, 6\(en8 characters, must differ from the PIN.
+.TQ
+Management key
+replaced by a random one stored on the key, unlocked by the PIN.
 .PP
-Lost PUK and blocked PIN: only a PIV reset helps, which wipes the PIV keys.
+A PIN or PUK that was already changed is never touched. The PIN is asked
+only while at least 2 tries are left.
+Only registered keys can be changed.
+.PP
+Three wrong PINs block the PIN; the PUK unblocks it. Lost PUK and blocked
+PIN: only a PIV reset helps, which wipes the PIV keys.
 .SH KEEPASSXC
 The secret exists only in memory while the screen is open; write it to
 every key in one visit and keep the paper copy

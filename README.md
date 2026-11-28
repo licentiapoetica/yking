@@ -57,7 +57,18 @@ so plain `ssh host` works with whichever key is plugged in. Only yking's own
 the same host is taken over only if it has nothing yking would drop. The result
 is checked with `ssh -G` before you apply it.
 
+## PIV
+
+PIV is a separate applet with its own PIN, PUK and 24 key slots, independent
+of FIDO2, OpenPGP and OTP. `P` shows each plugged-in key's PIN/PUK tries, remaining
+factory defaults and used slots. `c` replaces the default PIN, PUK and
+management key (random, stored on the key behind the PIN), only while the key
+still reports them as default. Keep the PUK: it unblocks a locked PIN.
+
+If gpg is running, apply `f` on the PGP screen first so gpg and ykman can
+share the smart-card interface.
+
 ## Status
 
 Works: key registry, SSH keys and ssh config, PAM (sudo, login, lock screen), LUKS FIDO2 unlock, PGP subkeys on keys, PIV status and default PIN/PUK replacement, KeePassXC challenge-response, lock on unplug, revoke, doctor.
-Planned: Debian support, remote unlock over SSH.
+Planned: PIV keys for SSH (PKCS#11), age and gpg; Debian support, remote unlock over SSH.
