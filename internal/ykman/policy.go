@@ -21,6 +21,10 @@ import (
 //   - The ONE exception to "never delete" is clearOTPSlot2 below: OTP slot
 //     2 only, offered by the TUI only for a key whose slot just failed the
 //     challenge-response test, after the user typed the key's label.
+//   - PIV credentials are changed only away from their public factory
+//     defaults (fromDefault below). The client methods re-read the key
+//     first and refuse unless it reports that very credential as default,
+//     so a PIN or PUK the user set is never touched.
 
 // Kind classifies what a rule does to the key.
 type Kind int
@@ -41,6 +45,8 @@ func (k Kind) String() string {
 		return "add-only"
 	case Clear:
 		return "clear OTP slot 2"
+	case FromDefault:
+		return "replace a factory default"
 	default:
 		return "unknown"
 	}
@@ -50,6 +56,7 @@ func (k Kind) String() string {
 const (
 	serialArg  = "<serial>"
 	pgpSlotArg = "<pgp-slot>" // sig, dec or aut
+	pivSlotArg = "<piv-slot>" // 9a, 9c, 9d, 9e, 82–95
 	hexArg     = "<hex>"      // a challenge (not a secret), 2–128 hex digits
 )
 
@@ -73,6 +80,8 @@ var allowlist = []rule{
 	{"otp-info", ReadOnly, []string{"--device", serialArg, "otp", "info"}},
 	{"openpgp-info", ReadOnly, []string{"--device", serialArg, "openpgp", "info"}},
 	{"openpgp-key-info", ReadOnly, []string{"--device", serialArg, "openpgp", "keys", "info", pgpSlotArg}},
+	{"piv-info", ReadOnly, []string{"--device", serialArg, "piv", "info"}},
+	{"piv-key-info", ReadOnly, []string{"--device", serialArg, "piv", "keys", "info", pivSlotArg}},
 	{"otp-calculate", ReadOnly, []string{"--device", serialArg, "otp", "calculate", "2", hexArg}},
 	// The secret is read from stdin, never passed here.
 	{"otp-chalresp", AddOnly, []string{"--device", serialArg, "otp", "chalresp", "2"}},
@@ -85,6 +94,18 @@ var clearOTPSlot2 = []string{"--device", serialArg, "otp", "delete", "2"}
 
 // Clear marks the single deleting rule.
 const Clear Kind = 100
+
+// FromDefault marks the PIV credential changes. Old and new values go over
+// stdin; the client methods (ChangePIVPIN, ChangePIVPUK,
+// ProtectPIVManagementKey) run them only while the key reports the factory
+// default.
+const FromDefault Kind = 101
+
+var fromDefault = [][]string{
+	{"--device", serialArg, "piv", "access", "change-pin"},
+	{"--device", serialArg, "piv", "access", "change-puk"},
+	{"--device", serialArg, "piv", "access", "change-management-key", "--protect"},
+}
 
 // forbiddenTokens may never appear in any ykman invocation, no matter what
 // the allowlist says. Defense in depth against a bad rule edit.
@@ -125,6 +146,11 @@ func Check(args []string) (Kind, error) {
 	if matches(clearOTPSlot2, args) {
 		return Clear, nil
 	}
+	for _, p := range fromDefault {
+		if matches(p, args) {
+			return FromDefault, nil
+		}
+	}
 	for _, a := range args {
 		if forbiddenTokens[strings.ToLower(a)] {
 			return 0, &PolicyError{args, fmt.Sprintf("forbidden token %q", a)}
@@ -154,6 +180,10 @@ func matches(pattern, args []string) bool {
 			}
 		case pgpSlotArg:
 			if args[i] != "sig" && args[i] != "dec" && args[i] != "aut" {
+				return false
+			}
+		case pivSlotArg:
+			if !IsPIVSlot(args[i]) {
 				return false
 			}
 		default:

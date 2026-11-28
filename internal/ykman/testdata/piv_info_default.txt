@@ -1,0 +1,9 @@
+PIV version:              5.7.1
+PIN tries remaining:      3/3
+PUK tries remaining:      3/3
+Management key algorithm: AES192
+WARNING: Using default PIN!
+WARNING: Using default PUK!
+WARNING: Using default Management key!
+CHUID: No data available
+CCC:   No data available

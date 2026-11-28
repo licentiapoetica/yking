@@ -1,6 +1,6 @@
 .TH YKING 1 2026-11-27 "yking" "User Commands"
 .SH NAME
-yking \- set up YubiKeys on Linux: SSH, PAM, LUKS, PGP, KeePassXC, plug/unplug actions
+yking \- set up YubiKeys on Linux: SSH, PAM, LUKS, PGP, PIV, KeePassXC, plug/unplug actions
 .SH SYNOPSIS
 .B yking
 .RB [ \-keyring
@@ -151,6 +151,10 @@ PGP: list GnuPG identities, create one, add a signing subkey, copy the
 signing and encryption subkeys to the plugged-in key, back them up,
 set git signing, remove them from disk (card-only).
 .TP
+.B P
+PIV: PIN and PUK tries, factory defaults and used slots of each plugged-in
+key; replace the default PIN, PUK and management key.
+.TP
 .B v
 KeePassXC: write one HMAC-SHA1 challenge-response secret into OTP slot 2
 of each key.
@@ -201,6 +205,15 @@ and
 to
 .IR scdaemon.conf ,
 so gpg and ykman can share the key.
+.SH PIV
+.B c
+asks for everything first, then replaces each credential the key still
+reports as factory default: the PIN, the PUK, and the management key (a
+random one stored on the key, unlocked by the PIN). A PIN or PUK that was
+already changed is never touched. Values go to ykman on stdin. The PIN is
+asked only while at least 2 tries are left.
+.PP
+Lost PUK and blocked PIN: only a PIV reset helps, which wipes the PIV keys.
 .SH KEEPASSXC
 The secret exists only in memory while the screen is open; write it to
 every key in one visit and keep the paper copy
@@ -214,7 +227,10 @@ installs a udev rule that gives the logged-in user the OTP interface,
 which challenge-response over USB needs.
 .SH SAFETY
 yking runs ykman only through an allowlist without reset, delete, PIN or
-interface commands. The one exception is clearing OTP slot 2
+interface commands. The exceptions are replacing the factory PIV
+credentials (see
+.BR PIV )
+and clearing OTP slot 2
 .RB ( x
 on the KeePassXC screen), offered only for a key whose slot just failed the
 challenge-response test, after the key's label was typed.

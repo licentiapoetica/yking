@@ -44,9 +44,9 @@ Flags:
 
 func main() {
 	// ssh and ssh-keygen run yking as SSH_ASKPASS: forward the prompt to the
-	// TUI. `yking pgp` / `yking pam` children have the socket too but are
-	// not askpass.
-	if os.Getenv(askpass.EnvSock) != "" && !(len(os.Args) > 1 && (os.Args[1] == "pgp" || os.Args[1] == "pam")) {
+	// TUI. `yking pgp` / `yking piv` / `yking pam` children have the socket
+	// too but are not askpass.
+	if os.Getenv(askpass.EnvSock) != "" && !(len(os.Args) > 1 && (os.Args[1] == "pgp" || os.Args[1] == "piv" || os.Args[1] == "pam")) {
 		os.Exit(askpass.Main(os.Args[1:]))
 	}
 	fs := flag.NewFlagSet("yking", flag.ExitOnError)
@@ -88,6 +88,8 @@ func main() {
 		err = cmdEvent(client, *keyringPath, args)
 	case "pgp":
 		err = cmdPGP(client, args)
+	case "piv":
+		err = cmdPIV(client, args)
 	case "deps":
 		err = cmdDeps(args)
 	case "pam":

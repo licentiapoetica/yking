@@ -57,7 +57,7 @@ func (m model) viewRun() string {
 
 	case r.prompt != nil && r.kind == promptPIN:
 		k := r.promptKey
-		if r.minPIN > 0 { // OpenPGP: the prompt names key and tries
+		if r.minPIN > 0 { // OpenPGP/PIV: the prompt names key and tries
 			if k != nil {
 				b.WriteString(m.art(k.Label, false) + "\n")
 			}

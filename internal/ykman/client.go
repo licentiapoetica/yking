@@ -26,8 +26,12 @@ func New(r runner.Runner) *Client { return &Client{r: r} }
 
 // run is the single choke point for ykman execution.
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
-	if _, err := Check(args); err != nil {
+	k, err := Check(args)
+	if err != nil {
 		return nil, err
+	}
+	if k != ReadOnly { // writes go through their guarded methods
+		return nil, &PolicyError{args, k.String() + " needs its guarded method"}
 	}
 	res, err := c.r.Run(ctx, Binary, args...)
 	if err != nil {

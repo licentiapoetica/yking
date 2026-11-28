@@ -1,0 +1,21 @@
+PIV version:              5.7.1
+PIN tries remaining:      2/3
+PUK tries remaining:      3/3
+Management key algorithm: AES192
+WARNING: Using default PUK!
+Management key is stored on the YubiKey, protected by PIN.
+CHUID: No data available
+CCC:   No data available
+Slot 9A (AUTHENTICATION):
+  Private key type: ECCP256
+  Public key type:  ECCP256
+  Subject DN:       CN=alice
+  Issuer DN:        CN=alice
+  Serial:           11:11:11:11
+  Fingerprint:      1111111111111111111111111111111111111111111111111111111111111111
+  Not before:       2026-01-01T00:00:00+00:00
+  Not after:        2036-01-01T00:00:00+00:00
+
+Slot 82 (RETIRED1):
+  Private key type: X25519
+

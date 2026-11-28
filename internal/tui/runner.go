@@ -105,7 +105,7 @@ type runner struct {
 	touchFile string
 
 	pinAsked bool
-	minPIN   int   // OpenPGP prompt: its minimum length (0: FIDO2 rules)
+	minPIN   int   // OpenPGP/PIV prompt: its minimum length (0: FIDO2 rules)
 	stopErr  error // why yking stopped the child (wins over its exit status)
 	lines    []string
 	stages   []string // headings announced by the child (KindPhase)
@@ -375,6 +375,8 @@ func (m model) onRequest(q *askpass.Request) (tea.Model, tea.Cmd) {
 	key, file := m.keyForPrompt(q.Prompt)
 	low := strings.ToLower(q.Prompt)
 	switch {
+	case strings.HasPrefix(low, "new piv ") || strings.HasPrefix(low, "repeat new piv "):
+		r.kind = promptSecret // choosing a value spends no try
 	case strings.Contains(low, "pin"):
 		if key == nil {
 			key = r.job.key
@@ -385,13 +387,15 @@ func (m model) onRequest(q *askpass.Request) (tea.Model, tea.Cmd) {
 			r.stop(errors.New("the PIN was not accepted. Stopped so no further attempts are used — check the tries left on the key list"))
 			return m, next
 		}
-		// OpenPGP PINs: yking pgp checks the tries itself.
+		// OpenPGP and PIV PINs: yking pgp / piv check the tries itself.
 		r.minPIN = 0
 		if strings.Contains(low, "openpgp") {
 			r.minPIN = 6
 			if strings.Contains(low, "admin") {
 				r.minPIN = 8
 			}
+		} else if strings.Contains(low, "piv pin") {
+			r.minPIN = 6
 		} else if key != nil {
 			if f := m.fidoOf(key.Serial); f != nil {
 				if ok, why := f.PINPromptAllowed(); !ok {

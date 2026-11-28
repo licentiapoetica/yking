@@ -1,6 +1,6 @@
 # yking
 
-TUI for setting up YubiKeys on Linux: SSH, PAM, LUKS, PGP, KeePassXC, plug/unplug actions. `man yking` after installing.
+TUI for setting up YubiKeys on Linux: SSH, PAM, LUKS, PGP, PIV, KeePassXC, plug/unplug actions. `man yking` after installing.
 
 ## Requirements
 
@@ -59,5 +59,5 @@ is checked with `ssh -G` before you apply it.
 
 ## Status
 
-Works: key registry, SSH keys and ssh config, PAM (sudo, login, lock screen), LUKS FIDO2 unlock, PGP subkeys on keys, KeePassXC challenge-response, lock on unplug, revoke, doctor.
+Works: key registry, SSH keys and ssh config, PAM (sudo, login, lock screen), LUKS FIDO2 unlock, PGP subkeys on keys, PIV status and default PIN/PUK replacement, KeePassXC challenge-response, lock on unplug, revoke, doctor.
 Planned: Debian support, remote unlock over SSH.

@@ -1,0 +1,5 @@
+Key slot:               9A (AUTHENTICATION)
+Algorithm:              ECCP256
+Origin:                 GENERATED
+PIN required for use:   ONCE
+Touch required for use: ALWAYS

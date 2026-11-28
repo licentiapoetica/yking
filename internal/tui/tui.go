@@ -56,6 +56,7 @@ const (
 	modeImport
 	modeHosts
 	modePGP
+	modePIV
 	modeKeePass
 	modeRun
 )
@@ -102,6 +103,7 @@ type model struct {
 	imp        importScreen
 	hosts      hostsScreen
 	pgp        pgpScreen
+	piv        pivScreen
 	kp         kpScreen
 	run        runner
 	// pendingArchive: revoked key files to move once the plan applied.
@@ -299,6 +301,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateHosts(msg)
 	case modePGP:
 		return m.updatePGP(msg)
+	case modePIV:
+		return m.updatePIV(msg)
 	case modeKeePass:
 		return m.updateKeePass(msg)
 	case modeRun:
@@ -421,6 +425,8 @@ func (m model) updateKeys(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case "g":
 		return m.openPGP()
+	case "P":
+		return m.openPIV()
 	case "v":
 		if !m.scanning {
 			return m.openKeePass()
@@ -512,6 +518,9 @@ func (m model) screen(height int) (string, string) {
 		case m.pgp.askOnly:
 			help = "y yes · n no"
 		}
+	case modePIV:
+		b.WriteString(m.piv.view())
+		help = "↑↓ key · c set PIN/PUK · r reload · esc back"
 	case modeHosts:
 		b.WriteString(m.hosts.view())
 		help = "↑↓ host · enter review · r reload · esc back"
@@ -574,7 +583,7 @@ func (m model) screen(height int) (string, string) {
 		if pkgs, units := deps.Actions(m.deps); len(pkgs)+len(units) > 0 {
 			help = "I install missing · "
 		}
-		help += "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · g PGP · v KeePassXC · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
+		help += "↑↓ select · e enroll · t test · c PAM check · s SSH key · l link · d deploy · o ssh config · p PAM · g PGP · P PIV · v KeePassXC · b disk · u plug actions · x revoke · i import · h doctor · r rescan · q quit"
 	}
 	return b.String(), help
 }
